@@ -1,7 +1,8 @@
 import { api } from "@/server/http";
 import { getProviderStatuses } from "@/server/models";
 import { liveEnabled, requiresPassword } from "@/server/security";
-import { storageMode } from "@/server/db";
+import { storageMode, databaseBackend } from "@/server/db";
+import { webSearchConfigured } from "@/server/web-search";
 
 export const runtime = "nodejs";
 export async function GET(request: Request) {
@@ -13,6 +14,8 @@ export async function GET(request: Request) {
       passwordRequired: requiresPassword(),
       liveEnabled: liveEnabled(),
       storage: storageMode(),
+      databaseBackend: databaseBackend(),
+      webSearchConfigured: webSearchConfigured(),
     }),
     { public: true },
   );

@@ -19,12 +19,24 @@ import {
   type Lease,
 } from "./store";
 import { consumeLimit, reserveModelCalls } from "./security";
+import { withOperation, type Operation } from "./operations";
+import { operationRuntime } from "./trace";
 
 async function ensureModel(
-  input: { model: Simulation["model"] },
+  input: { model: Simulation["model"]; privacy?: { allowCloud: boolean } },
   owner: string,
   calls: number,
+  requireConsent = false,
 ) {
+  if (
+    input.privacy?.allowCloud === false &&
+    ["openai", "google"].includes(input.model.provider)
+  )
+    throw new AppError(
+      "CLOUD_PROCESSING_DENIED",
+      "This run does not allow cloud model processing. Create a new run with explicit cloud consent or use a local provider.",
+      403,
+    );
   if (!isSupportedModel(input.model))
     throw new AppError(
       "INVALID_MODEL",
@@ -48,22 +60,38 @@ async function ensureModel(
       "INVALID_MODEL",
       "Choose one of the configured cloud model presets.",
     );
+  if (
+    requireConsent &&
+    ["openai", "google"].includes(input.model.provider) &&
+    input.privacy?.allowCloud !== true
+  )
+    throw new AppError(
+      "CLOUD_CONSENT_REQUIRED",
+      "Explicitly allow cloud model processing before creating this run.",
+      403,
+    );
   if (input.model.provider !== "demo") await reserveModelCalls(owner, calls);
 }
 
-export async function createSimulation(
+async function createSimulationInternal(
   input: CreateSimulationInput,
   owner: string,
   signal: AbortSignal,
+  operation: Operation,
 ) {
   await consumeLimit(`create:${owner}`, 30, 60 * 60 * 1000);
-  await ensureModel(input, owner, 1);
+  await ensureModel(input, owner, 3, true);
   const sources: Source[] = input.sources.map((s, i) => ({
     ...s,
     id: `source-${i + 1}`,
     hash: createHash("sha256").update(s.content).digest("hex"),
   }));
-  const world = await buildWorld(input, sources, signal);
+  const runtime = await operationRuntime(
+    operation,
+    input.privacy?.allowWebSearch === true,
+    signal,
+  );
+  const world = await buildWorld(input, sources, runtime.signal, runtime.hooks);
   signal.throwIfAborted();
   const now = new Date().toISOString();
   const simulation: Simulation = {
@@ -72,6 +100,7 @@ export async function createSimulation(
     question: input.question,
     context: input.context,
     model: input.model,
+    privacy: input.privacy ?? { allowCloud: false },
     seed: input.seed,
     maxRounds: input.maxRounds,
     initialWorld: structuredClone(world),
@@ -87,16 +116,17 @@ export async function createSimulation(
     parentId: null,
     forkRound: null,
     version: 0,
-    usage: { modelCalls: input.model.provider === "demo" ? 0 : 1 },
+    usage: { modelCalls: runtime.modelCalls() },
     manifest: { engineVersion: ENGINE_VERSION, promptVersion: PROMPT_VERSION },
   };
-  return insertSimulation(simulation, owner);
+  return insertSimulation(simulation, owner, operation);
 }
 
 async function mutate(
   id: string,
   owner: string,
   update: (simulation: Simulation, lease: Lease) => Promise<Simulation>,
+  operation: Operation,
 ) {
   const lease = await acquireLease(id, owner);
   try {
@@ -104,17 +134,27 @@ async function mutate(
       lease,
       await update(lease.simulation, lease),
       owner,
+      operation,
     );
   } finally {
-    await releaseLease(id, owner, lease.token);
+    // A cleanup outage must not turn an already committed success into a misleading failure.
+    await releaseLease(id, owner, lease.token).catch(() => {
+      console.error(
+        JSON.stringify({
+          event: "lease_cleanup_failed",
+          code: "DATABASE_UNAVAILABLE",
+        }),
+      );
+    });
   }
 }
 
-export async function stepSimulation(
+async function stepSimulationInternal(
   id: string,
   owner: string,
   expectedRound: number,
   signal: AbortSignal,
+  operation: Operation,
 ) {
   const current = await readSimulation(id, owner);
   if (expectedRound < current.rounds.length) return current;
@@ -126,39 +166,54 @@ export async function stepSimulation(
       true,
     );
   if (current.rounds.length >= current.maxRounds) return current;
-  return mutate(id, owner, async (simulation) => {
-    if (expectedRound !== simulation.rounds.length)
-      throw new AppError(
-        "ROUND_MISMATCH",
-        "The run advanced in another request. Reload the saved state.",
-        409,
-        true,
+  return mutate(
+    id,
+    owner,
+    async (simulation) => {
+      if (expectedRound !== simulation.rounds.length)
+        throw new AppError(
+          "ROUND_MISMATCH",
+          "The run advanced in another request. Reload the saved state.",
+          409,
+          true,
+        );
+      await ensureModel(simulation, owner, simulation.world.actors.length * 3);
+      const runtime = await operationRuntime(
+        operation,
+        simulation.privacy?.allowWebSearch === true,
+        signal,
       );
-    await ensureModel(simulation, owner, simulation.world.actors.length);
-    const round = await executeRound(simulation, signal);
-    signal.throwIfAborted();
-    if (round.number !== simulation.rounds.length + 1)
-      throw new AppError(
-        "INVALID_ROUND",
-        "The engine returned an invalid round number.",
-        500,
+      const round = await executeRound(
+        simulation,
+        runtime.signal,
+        runtime.hooks,
       );
-    return {
-      ...simulation,
-      rounds: [...simulation.rounds, round],
-      world: { ...simulation.world, actors: round.actors },
-      report: null,
-      status: round.number >= simulation.maxRounds ? "completed" : "ready",
-      usage: { modelCalls: simulation.usage.modelCalls + round.modelCalls },
-    };
-  });
+      signal.throwIfAborted();
+      if (round.number !== simulation.rounds.length + 1)
+        throw new AppError(
+          "INVALID_ROUND",
+          "The engine returned an invalid round number.",
+          500,
+        );
+      return {
+        ...simulation,
+        rounds: [...simulation.rounds, round],
+        world: { ...simulation.world, actors: round.actors },
+        report: null,
+        status: round.number >= simulation.maxRounds ? "completed" : "ready",
+        usage: { modelCalls: simulation.usage.modelCalls + round.modelCalls },
+      };
+    },
+    operation,
+  );
 }
 
-export async function branchSimulation(
+async function branchSimulationInternal(
   id: string,
   owner: string,
   intervention: string,
-  title?: string,
+  title: string | undefined,
+  operation: Operation,
 ) {
   await consumeLimit(`create:${owner}`, 30, 60 * 60 * 1000);
   // A read is a consistent completed checkpoint even while a new round is in flight.
@@ -191,65 +246,81 @@ export async function branchSimulation(
       },
     ],
   };
-  return insertSimulation(child, owner);
+  return insertSimulation(child, owner, operation);
 }
 
-export async function chatSimulation(
+async function chatSimulationInternal(
   id: string,
   owner: string,
   message: string,
   actorId: string | undefined,
   signal: AbortSignal,
+  operation: Operation,
 ) {
-  return mutate(id, owner, async (simulation) => {
-    if (simulation.messages.length >= 80)
-      throw new AppError(
-        "CHAT_LIMIT",
-        "This run reached 40 questions. Export the conversation or continue in a new branch.",
+  return mutate(
+    id,
+    owner,
+    async (simulation) => {
+      if (simulation.messages.length >= 80)
+        throw new AppError(
+          "CHAT_LIMIT",
+          "This run reached 40 questions. Export the conversation or continue in a new branch.",
+        );
+      if (actorId && !simulation.world.actors.some((a) => a.id === actorId))
+        throw new AppError(
+          "INVALID_ACTOR",
+          "Select an actor in this simulation.",
+        );
+      await ensureModel(simulation, owner, 3);
+      const runtime = await operationRuntime(
+        operation,
+        simulation.privacy?.allowWebSearch === true,
+        signal,
       );
-    if (actorId && !simulation.world.actors.some((a) => a.id === actorId))
-      throw new AppError(
-        "INVALID_ACTOR",
-        "Select an actor in this simulation.",
+      const response = await answerQuestion(
+        simulation,
+        message,
+        actorId,
+        runtime.signal,
+        runtime.hooks,
       );
-    await ensureModel(simulation, owner, 1);
-    const response = await answerQuestion(simulation, message, actorId, signal);
-    signal.throwIfAborted();
-    const now = new Date().toISOString();
-    return {
-      ...simulation,
-      messages: [
-        ...simulation.messages,
-        {
-          id: randomUUID(),
-          role: "user" as const,
-          content: message,
-          actorId: actorId || null,
-          createdAt: now,
-          round: simulation.rounds.length,
+      signal.throwIfAborted();
+      const now = new Date().toISOString();
+      return {
+        ...simulation,
+        messages: [
+          ...simulation.messages,
+          {
+            id: randomUUID(),
+            role: "user" as const,
+            content: message,
+            actorId: actorId || null,
+            createdAt: now,
+            round: simulation.rounds.length,
+          },
+          {
+            id: randomUUID(),
+            role: "assistant" as const,
+            content: response,
+            actorId: actorId || null,
+            createdAt: now,
+            round: simulation.rounds.length,
+          },
+        ],
+        usage: {
+          modelCalls: simulation.usage.modelCalls + runtime.modelCalls(),
         },
-        {
-          id: randomUUID(),
-          role: "assistant" as const,
-          content: response,
-          actorId: actorId || null,
-          createdAt: now,
-          round: simulation.rounds.length,
-        },
-      ],
-      usage: {
-        modelCalls:
-          simulation.usage.modelCalls +
-          (simulation.model.provider === "demo" ? 0 : 1),
-      },
-    };
-  });
+      };
+    },
+    operation,
+  );
 }
 
-export async function reportSimulation(
+async function reportSimulationInternal(
   id: string,
   owner: string,
   signal: AbortSignal,
+  operation: Operation,
 ) {
   const current = await readSimulation(id, owner);
   if (current.report) return current;
@@ -258,18 +329,95 @@ export async function reportSimulation(
       "NO_ROUNDS",
       "Complete at least one round before generating a report.",
     );
-  return mutate(id, owner, async (simulation) => {
-    await ensureModel(simulation, owner, 1);
-    const report = await generateReport(simulation, signal);
-    signal.throwIfAborted();
-    return {
-      ...simulation,
-      report,
-      usage: {
-        modelCalls:
-          simulation.usage.modelCalls +
-          (simulation.model.provider === "demo" ? 0 : 1),
-      },
-    };
-  });
+  return mutate(
+    id,
+    owner,
+    async (simulation) => {
+      await ensureModel(simulation, owner, 3);
+      const runtime = await operationRuntime(
+        operation,
+        simulation.privacy?.allowWebSearch === true,
+        signal,
+      );
+      const report = await generateReport(
+        simulation,
+        runtime.signal,
+        runtime.hooks,
+      );
+      signal.throwIfAborted();
+      return {
+        ...simulation,
+        report,
+        usage: {
+          modelCalls: simulation.usage.modelCalls + runtime.modelCalls(),
+        },
+      };
+    },
+    operation,
+  );
+}
+
+export function createSimulation(
+  input: CreateSimulationInput,
+  owner: string,
+  signal: AbortSignal,
+) {
+  const { requestId, ...payload } = input;
+  return withOperation(owner, "create", null, payload, requestId, (op) =>
+    createSimulationInternal(payload, owner, signal, op),
+  );
+}
+export function stepSimulation(
+  id: string,
+  owner: string,
+  expectedRound: number,
+  signal: AbortSignal,
+  requestId?: string,
+) {
+  return withOperation(owner, "step", id, { expectedRound }, requestId, (op) =>
+    stepSimulationInternal(id, owner, expectedRound, signal, op),
+  );
+}
+export function branchSimulation(
+  id: string,
+  owner: string,
+  intervention: string,
+  title?: string,
+  requestId?: string,
+) {
+  return withOperation(
+    owner,
+    "branch",
+    id,
+    { intervention, title },
+    requestId,
+    (op) => branchSimulationInternal(id, owner, intervention, title, op),
+  );
+}
+export function chatSimulation(
+  id: string,
+  owner: string,
+  message: string,
+  actorId: string | undefined,
+  signal: AbortSignal,
+  requestId?: string,
+) {
+  return withOperation(
+    owner,
+    "chat",
+    id,
+    { message, actorId },
+    requestId,
+    (op) => chatSimulationInternal(id, owner, message, actorId, signal, op),
+  );
+}
+export function reportSimulation(
+  id: string,
+  owner: string,
+  signal: AbortSignal,
+  requestId?: string,
+) {
+  return withOperation(owner, "report", id, {}, requestId, (op) =>
+    reportSimulationInternal(id, owner, signal, op),
+  );
 }

@@ -307,7 +307,7 @@ describe("saved demo round operations", () => {
     controller.abort();
     await expect(
       stepSimulation("run-a", "owner", 1, controller.signal),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    ).rejects.toMatchObject({ code: "MODEL_CANCELLED" });
     expect(await readSimulation("run-a", "owner")).toEqual(checkpoint);
     await expect(acquireLease("run-a", "owner")).resolves.toMatchObject({
       version: checkpoint.version,

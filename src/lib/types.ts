@@ -8,6 +8,7 @@ export interface Source {
   name: string;
   content: string;
   hash: string;
+  access?: "actors" | "analyst-only";
 }
 export interface Actor {
   id: string;
@@ -19,6 +20,7 @@ export interface Actor {
   influence: number;
   sourceIds: string[];
   memory: string[];
+  capabilityProfile?: "community" | "research" | "operations" | "policy";
 }
 export interface Relationship {
   from: string;
@@ -57,6 +59,7 @@ export interface Round {
   actors: Actor[];
   createdAt: string;
   modelCalls: number;
+  execution?: { engineVersion: string; promptVersion: string };
 }
 export interface Intervention {
   id: string;
@@ -101,6 +104,7 @@ export interface Simulation {
   version: number;
   usage: { modelCalls: number };
   manifest: { engineVersion: string; promptVersion: string };
+  privacy?: { allowCloud: boolean; allowWebSearch?: boolean };
 }
 export interface CreateSimulationInput {
   title: string;
@@ -110,7 +114,67 @@ export interface CreateSimulationInput {
   seed: number;
   maxRounds: number;
   actorCount: number;
-  sources: { name: string; content: string }[];
+  sources: {
+    name: string;
+    content: string;
+    access?: "actors" | "analyst-only";
+  }[];
+  privacy?: { allowCloud: boolean; allowWebSearch?: boolean };
+  requestId?: string;
+}
+export interface OperationRecord {
+  id: string;
+  kind: "create" | "step" | "branch" | "chat" | "report";
+  status: "running" | "completed" | "failed" | "interrupted";
+  startedAt: string;
+  finishedAt: string | null;
+  errorCode: string | null;
+  attempt: number;
+  engineVersion: string;
+  promptVersion: string;
+}
+export interface EngineTraceEvent {
+  phase: "architect" | "actor" | "analyst" | "interview" | "research";
+  kind: "phase-start" | "tool-start" | "tool-result" | "phase-end" | "error";
+  actorId?: string;
+  tool?: string;
+  summary: string;
+  durationMs?: number;
+  status?: "success" | "failed";
+  callId?: string;
+  modelCalls?: number;
+  webSources?: { title: string; url: string }[];
+}
+export interface ExecutionTrace extends EngineTraceEvent {
+  id: string;
+  operationId: string;
+  createdAt: string;
+  sequence: number;
+}
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+export interface EngineRuntimeHooks {
+  onEvent?: (event: EngineTraceEvent) => Promise<void> | void;
+  searchWeb?: (
+    query: string,
+    signal?: AbortSignal,
+  ) => Promise<WebSearchResult[]>;
+}
+export interface ExecutionFeed {
+  operations: OperationRecord[];
+  events: ExecutionTrace[];
+}
+export interface PrivacyInfo {
+  storage: "local" | "remote";
+  sessionExpiresAt: string;
+  simulationCount: number;
+  activeOperations: number;
+  retentionDays: number;
+  providerDataPolicy: string;
+  instanceProtected: boolean;
 }
 export interface SimulationSummary {
   id: string;
@@ -142,4 +206,6 @@ export interface AppConfig {
   passwordRequired: boolean;
   liveEnabled: boolean;
   storage: "local" | "remote";
+  databaseBackend?: "libsql" | "postgres";
+  webSearchConfigured?: boolean;
 }

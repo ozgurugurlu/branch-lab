@@ -1,9 +1,12 @@
+import { EngineError } from "../mastra/errors";
+
 export class AppError extends Error {
   constructor(
     public code: string,
     message: string,
     public status = 400,
     public retryable = false,
+    public retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "AppError";
@@ -13,6 +16,13 @@ export class AppError extends Error {
 /** Provider SDK errors may contain request bodies and credentials. Never echo them. */
 export function publicError(error: unknown) {
   if (error instanceof AppError) return error;
+  if (error instanceof EngineError)
+    return new AppError(
+      error.code,
+      error.message,
+      error.status,
+      error.retryable,
+    );
   if (
     error instanceof Error &&
     (error.name === "AbortError" || error.name === "TimeoutError")

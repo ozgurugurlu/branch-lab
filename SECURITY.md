@@ -1,11 +1,29 @@
 # Security and deployment model
 
-Branchlab is intended for local use or a small trusted instance, with browser-session isolation and an optional shared instance password. Set `APP_PASSWORD` for any accessible deployment. Hosted live model execution requires it. This is not a multi-tenant SaaS account system.
+Branchlab is for local use or a **small trusted instance**. Browser-session isolation and a shared `APP_PASSWORD` are not individual accounts, enterprise RBAC or a public SaaS identity system. Set a strong password and use HTTPS for an accessible deployment. Hosted live model connections require the password; removing it opens that instance's session-owned workspaces to whoever holds their cookies.
 
-Model credentials and fixed base URLs belong in server environment variables. Never put them in `NEXT_PUBLIC_*` variables, issue reports, screenshots or exported scenarios. The app does not accept arbitrary browser-supplied URLs and does not give actors network or shell tools.
+## Sessions and requests
 
-Source documents are untrusted input. They are presented to models as data, all structured outputs are validated, and only ordinary application code changes world state. This limits the impact of prompt injection but cannot guarantee that a model's prose or decisions ignore malicious source instructions. Treat generated claims as synthetic output and verify evidence before relying on them.
+A random 256-bit HttpOnly, SameSite=Strict cookie identifies each browser workspace. It expires 30 days after creation; activity does not extend it. HTTPS/hosted deployments use Secure cookies. Password changes invalidate previously unlocked sessions. Losing the cookie loses access to that workspace; there is no account recovery or cross-device synchronization.
 
-The database stores source text and complete simulation histories. Secure and back up it accordingly. Anyone with the browser session cookie can access that browser's runs; use HTTPS. Exports contain source material and actor histories. No credentials or session identifiers are included.
+Every run, export, operation and trace read is scoped to the session owner. Locking interrupts existing operation records and revokes their write leases; unlocking does not revive those operation tokens. Workspace erasure atomically removes owned data and fences late commits. It cannot retract work already received by a model provider. [Retention and deletion](docs/privacy.md).
 
-If you identify a vulnerability, use your hosting repository's private vulnerability reporting feature if enabled, or contact its maintainer privately. Do not publish credentials or private source documents in a public issue. This template does not designate an external recipient or promise a response time.
+Mutations reject cross-site Fetch Metadata and mismatched supplied origins. When configured, `APP_ORIGIN` is authoritative; otherwise the request destination origin is used. Arbitrary `X-Forwarded-Host` is not trusted. Non-browser clients may omit Origin, but still need the session and authentication. JSON input has schema, encoding, byte-size and receive-time limits. Password attempts and request/model/search budgets are persisted in SQL, including global limits that survive cookie resets.
+
+API responses use `no-store`, safe error codes and server-generated correlation IDs. Logs omit prompts, provider bodies and user-controlled path segments. The browser receives nosniff, frame restrictions, a restrictive permissions policy and a same-origin CSP. The static Next.js shell still permits inline bootstrap scripts/styles; this is not a nonce-based strict CSP. Configure TLS and any HSTS policy at your deployment edge.
+
+## Secrets, tools and source material
+
+Credentials and model endpoints belong in server environment variables, never `NEXT_PUBLIC_*`, issue reports or exported scenarios. Cloud inference uses fixed provider URLs; local endpoints are operator-controlled and validated. Redirects are rejected. URL validation does not resolve DNS, so operators must trust their configured gateways.
+
+Agents have bounded, read-only tools for authorized scenario observations. They have no shell, filesystem, arbitrary HTTP fetch or account-operation tools. Optional Brave search requires its server credential and explicit per-run consent, and is restricted to eligible research actors. Queries can reveal information from their observations. Result snippets remain untrusted data; the server does not fetch linked pages.
+
+Source documents and search results can contain prompt injection. Scope checks, output schemas, entity validation and deterministic state updates limit its impact; they do not guarantee that generated prose or decisions resist malicious instructions. Treat outputs as synthetic claims and verify consequential conclusions independently.
+
+The application database stores full source text, simulation histories and actor memories. It does not add application-level encryption to these records. Protect database credentials, storage and backups. Exports contain private scenario material. Operation traces omit raw prompts/tool arguments but may contain public search-result titles and URLs.
+
+PostgreSQL uses verified TLS for remote connections and short SERIALIZABLE transactions with bounded conflict retries. SQLite/Turso use short write transactions. Ownership predicates, revisions, lease tokens and revocation checks prevent stale writes; external model calls are not exactly-once. [Deployment details and verification limits](docs/deployment.md).
+
+## Reporting vulnerabilities
+
+Use your hosting repository's private vulnerability reporting feature if enabled, or contact its maintainer privately. Share a minimal reproduction and a request correlation ID when useful. Do not publish credentials, browser cookies, database URLs or private source documents. This template does not designate an external recipient or promise a response time.

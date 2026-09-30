@@ -153,7 +153,7 @@ describe("actual Next.js route contracts", () => {
     expect(health.status).toBe(200);
     expect(health.headers.get("cache-control")).toBe("no-store");
     expect(await health.json()).toEqual({
-      data: { status: "ok", storage: "local", version: "0.1.0" },
+      data: { status: "ok", storage: "local", version: "0.3.0" },
     });
   });
 
@@ -227,7 +227,8 @@ describe("actual Next.js route contracts", () => {
     );
     expect(jsonExport.headers.get("cache-control")).toBe("no-store");
     const exported = await jsonExport.json();
-    expect(exported).toEqual(run);
+    expect(exported).toMatchObject(run);
+    expect(exported.execution.operations.length).toBeGreaterThan(0);
     expect(exported).not.toHaveProperty("owner");
     expect(exported).not.toHaveProperty("session");
     expect(JSON.stringify(exported)).not.toContain(cookie.split("=")[1]);

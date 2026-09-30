@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   Action,
   CreateSimulationInput,
+  EngineTraceEvent,
   Simulation,
   Source,
 } from "@/lib/types";
@@ -22,6 +23,8 @@ import {
   validateReport,
   validateWorld,
 } from "@/mastra/domain";
+import { actorTools, runtimeFor } from "@/mastra/tools";
+import { CAPABILITY_PROFILES } from "@/lib/capabilities";
 
 vi.mock("@/server/models", () => ({
   resolveModel: vi.fn(() => {
@@ -107,6 +110,71 @@ function proposal(
 }
 
 describe("simulation engine invariants", () => {
+  it("executes honest demo read traces with zero model calls and different capability toolsets", async () => {
+    const simulation = await fixture();
+    const events: EngineTraceEvent[] = [];
+    const hooks = {
+      onEvent: (event: EngineTraceEvent) => {
+        events.push(event);
+      },
+    };
+    const round = await executeRound(simulation, undefined, hooks);
+    expect(round.modelCalls).toBe(0);
+    expect(events.filter((event) => event.kind === "tool-result")).toHaveLength(
+      simulation.world.actors.length,
+    );
+    expect(events.every((event) => event.summary.startsWith("Demo:"))).toBe(
+      true,
+    );
+    expect(
+      events
+        .filter((event) => event.kind === "phase-end")
+        .every((event) => event.modelCalls === 0),
+    ).toBe(true);
+    expect(
+      new Set(
+        Object.values(CAPABILITY_PROFILES).map((profile) =>
+          [...profile.tools].sort().join(","),
+        ),
+      ).size,
+    ).toBe(4);
+    for (const actor of simulation.world.actors)
+      expect(actor.capabilityProfile).toBeDefined();
+  });
+
+  it("keeps scoped actor tool data bounded even with a hostile stored source assignment", async () => {
+    const simulation = await fixture();
+    simulation.sources.push({
+      ...sources[0],
+      id: "source-secret",
+      content: "ANALYST_PRIVATE_TOOL_SENTINEL",
+      access: "analyst-only",
+    });
+    const actor = simulation.world.actors[0];
+    actor.sourceIds.push("source-secret");
+    actor.capabilityProfile = "research";
+    const observation = observeActor(simulation, actor.id);
+    const searchWeb = vi.fn();
+    const runtime = runtimeFor(
+      "actor",
+      true,
+      undefined,
+      { searchWeb },
+      actor.id,
+    );
+    const scoped = actorTools(observation, runtime, true);
+    expect(scoped.tools.search_web).toBeUndefined();
+    expect(scoped.tools.read_all_evidence).toBeUndefined();
+    const read = await scoped.runPrimary();
+    expect(JSON.stringify(read)).not.toContain("ANALYST_PRIVATE_TOOL_SENTINEL");
+    expect(JSON.stringify(read)).not.toContain("source-secret");
+    expect(searchWeb).not.toHaveBeenCalled();
+    await scoped.runPrimary();
+    await expect(scoped.runPrimary()).rejects.toMatchObject({
+      code: "MODEL_OUTPUT_INVALID",
+    });
+  });
+
   it("replays seeded worlds and rounds deterministically, independent of wall-clock timestamps", async () => {
     const left = await fixture();
     const right = await fixture();
@@ -312,6 +380,76 @@ describe("simulation engine invariants", () => {
 });
 
 describe("actor information boundaries and reference validation", () => {
+  it("excludes analyst-only sources from deterministic world construction and hostile stored assignments", async () => {
+    const privateSource: Source = {
+      id: "source-private",
+      name: "PRIVATE_DOCUMENT_NAME",
+      content: "PRIVATE_DOCUMENT_CONTENT",
+      hash: "c".repeat(64),
+      access: "analyst-only",
+    };
+    const publicWorld = await buildWorld(input, sources);
+    const privateWorld = await buildWorld(input, [...sources, privateSource]);
+    expect(privateWorld).toEqual(publicWorld);
+    const simulation = await fixture();
+    simulation.sources.push(privateSource);
+    simulation.world.actors[0].sourceIds = [privateSource.id];
+    expect(() => validateWorld(simulation.world, simulation.sources)).toThrow(
+      /source IDs/,
+    );
+    const observation = observeActor(simulation, "actor-1");
+    expect(observation.sources).toEqual([]);
+    expect(observation.actor.sourceIds).toEqual([]);
+    expect(JSON.stringify(observation)).not.toContain("PRIVATE_DOCUMENT");
+    expect(JSON.stringify(observation)).not.toContain("source-private");
+  });
+
+  it("checks reference-shaped inline citations without forbidding ordinary bracketed prose", async () => {
+    const simulation = await fixture();
+    simulation.world.actors[0].sourceIds = ["source-1"];
+    const observation = observeActor(simulation, "actor-1");
+    const action = proposal(simulation, "actor-1");
+    expect(
+      validateAction(
+        { ...action, content: "A [draft] proposal needs evidence." },
+        observation,
+      ).content,
+    ).toContain("[draft]");
+    expect(() =>
+      validateAction({ ...action, content: "See [source-2]." }, observation),
+    ).toThrow(/inline citation/);
+    expect(() =>
+      validateAction(
+        { ...action, content: "See [source-1].", sourceIds: [] },
+        observation,
+      ),
+    ).toThrow(/undeclared/);
+    expect(
+      validateAction(
+        { ...action, content: "See [source-1].", sourceIds: ["source-1"] },
+        observation,
+      ).sourceIds,
+    ).toEqual(["source-1"]);
+    expect(() =>
+      validateInterview(
+        {
+          answer: "A claim [simulation-test-r99-actor-1]",
+          eventIds: [],
+          sourceIds: [],
+        },
+        [],
+        [],
+      ),
+    ).toThrow(/inline citation/);
+    expect(() =>
+      validateInterview(
+        { answer: "A claim [source-1]", eventIds: [], sourceIds: [] },
+        [],
+        ["source-1"],
+      ),
+    ).toThrow(/undeclared/);
+  });
+
   it("excludes disconnected actors, other private memory, unassigned sources, and private chats", async () => {
     const simulation = await fixture();
     simulation.world.relationships = [

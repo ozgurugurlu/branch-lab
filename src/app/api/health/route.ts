@@ -1,11 +1,12 @@
 import { database, storageMode } from "@/server/db";
+import { version } from "../../../../package.json";
 
 export const runtime = "nodejs";
 export async function GET() {
   try {
     await (await database()).execute("SELECT 1");
     return Response.json(
-      { data: { status: "ok", storage: storageMode(), version: "0.1.0" } },
+      { data: { status: "ok", storage: storageMode(), version } },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {

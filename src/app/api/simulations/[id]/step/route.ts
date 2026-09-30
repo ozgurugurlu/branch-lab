@@ -11,10 +11,10 @@ export async function POST(
   return api(
     request,
     async ({ owner }) => {
-      const { expectedRound } = await body(request, stepSchema);
+      const { expectedRound, requestId } = await body(request, stepSchema);
       const { id } = await context.params;
       return withDeadline(request, (signal) =>
-        stepSimulation(id, owner, expectedRound, signal),
+        stepSimulation(id, owner, expectedRound, signal, requestId),
       );
     },
     { mutation: true },

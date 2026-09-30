@@ -1,6 +1,7 @@
 # Working on Branchlab
 
 - Read `docs/architecture.md` and `docs/implementation-contract.md` before changing execution or persistence contracts.
+- Read `docs/agent-runtime.md` and `docs/privacy.md` before changing tool capabilities, model prompts, source access or data retention.
 - Keep all source documents, keys and database files out of Git. Provider endpoints and credentials are server-owned environment settings.
 - Simulation actors must receive explicit, bounded observations, never the full run or another actor's private memory. Every round uses one frozen prior snapshot.
 - LLM responses propose typed actions. Ordinary code validates IDs and ranges, computes metrics, and owns state writes.
@@ -8,6 +9,7 @@
 - Keep deterministic demo behavior separate and visibly labeled. Never silently fall back to demo data after live-provider failures.
 - Support and disagreement are simulated indices, not calibrated real-world probabilities. Do not claim scientific forecasting accuracy from software tests.
 - Use `npm run check` and `npm run test:e2e` for behavioral changes. Test providers offline; live integration checks require explicit local configuration.
+- PostgreSQL integration tests require an explicit disposable `TEST_DATABASE_URL` ending in `_test`. Tests must never inherit production database connections or provider credentials.
 - Format changed files with Prettier. Keep API responses, schemas and client types synchronized; document deployment/runtime limits honestly.
 
 <!-- BEGIN:nextjs-agent-rules -->

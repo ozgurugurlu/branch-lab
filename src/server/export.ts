@@ -1,6 +1,9 @@
-import type { Simulation } from "@/lib/types";
+import type { ExecutionFeed, Simulation } from "@/lib/types";
 
-export function exportMarkdown(s: Simulation): string {
+export function exportMarkdown(
+  s: Simulation,
+  execution?: ExecutionFeed,
+): string {
   const lines = [
     `# ${s.title}`,
     "",
@@ -13,6 +16,7 @@ export function exportMarkdown(s: Simulation): string {
   lines.push(
     `Model: ${s.model.provider}/${s.model.model} · Seed: ${s.seed} · Rounds: ${s.rounds.length}/${s.maxRounds}`,
     `Engine: ${s.manifest.engineVersion} · Prompts: ${s.manifest.promptVersion} · Created: ${s.createdAt}`,
+    `Cloud model processing: ${s.privacy?.allowCloud === false ? "not permitted" : "permitted"}. Source visibility controls agent inputs; the workspace owner and exports include all stored sources.`,
     "",
     "## Context",
     "",
@@ -70,6 +74,7 @@ export function exportMarkdown(s: Simulation): string {
       `### ${source.name} (${source.id})`,
       "",
       `SHA-256: ${source.hash}`,
+      `Agent access: ${source.access === "analyst-only" ? "analyst only (excluded from architect and actors)" : "assigned actors and analyst"}`,
       "",
       source.content,
       "",
@@ -83,6 +88,26 @@ export function exportMarkdown(s: Simulation): string {
         message.content,
         "",
       );
+  }
+  if (execution) {
+    lines.push(
+      "",
+      "## Execution activity",
+      "",
+      "Most recent 100 operations and 600 execution events. These are tool/status summaries, not private model reasoning.",
+      "",
+    );
+    for (const operation of execution.operations)
+      lines.push(
+        `- ${operation.startedAt} · ${operation.kind} · ${operation.status} · attempt ${operation.attempt}${operation.errorCode ? ` · ${operation.errorCode}` : ""}`,
+      );
+    for (const event of execution.events) {
+      lines.push(
+        `- ${event.createdAt} · ${event.phase}${event.actorId ? ` / ${event.actorId}` : ""}${event.tool ? ` / ${event.tool}` : ""} · ${event.kind}: ${event.summary}`,
+      );
+      for (const source of event.webSources || [])
+        lines.push(`  - Web result: ${source.title} — ${source.url}`);
+    }
   }
   return lines.join("\n");
 }

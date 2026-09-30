@@ -10,3 +10,4 @@ playwright-report/
 test-results/
 .DS_Store
 .vercel/
+ai-coworker-demo-staging/

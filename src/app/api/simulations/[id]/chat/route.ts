@@ -14,7 +14,14 @@ export async function POST(
       const input = await body(request, chatSchema);
       const { id } = await context.params;
       return withDeadline(request, (signal) =>
-        chatSimulation(id, owner, input.message, input.actorId, signal),
+        chatSimulation(
+          id,
+          owner,
+          input.message,
+          input.actorId,
+          signal,
+          input.requestId,
+        ),
       );
     },
     { mutation: true },

@@ -9,6 +9,10 @@ import { AppError } from "./errors";
 type LocalProviderId = "ollama" | "lmstudio";
 type LocalConnection = { baseURL: string; apiKey: string | undefined };
 
+/** A redirect must never forward source text or credentials to another destination. */
+const providerFetch: typeof fetch = (input, init) =>
+  fetch(input, { ...init, redirect: "error" });
+
 /** Messages are deliberately fixed: no credentials, raw URLs, or provider responses. */
 export class ModelConfigurationError extends AppError {
   constructor(message: string) {
@@ -192,11 +196,17 @@ export function resolveModel(config: ModelConfig) {
 
   switch (config.provider) {
     case "openai":
-      return createOpenAI({ apiKey: env("OPENAI_API_KEY") }).responses(
-        config.model,
-      );
+      return createOpenAI({
+        apiKey: env("OPENAI_API_KEY"),
+        baseURL: "https://api.openai.com/v1",
+        fetch: providerFetch,
+      }).responses(config.model);
     case "google":
-      return createGoogleGenerativeAI({ apiKey: googleKey() })(config.model);
+      return createGoogleGenerativeAI({
+        apiKey: googleKey(),
+        baseURL: "https://generativelanguage.googleapis.com/v1beta",
+        fetch: providerFetch,
+      })(config.model);
     case "ollama":
     case "lmstudio": {
       const connection = localConnection(config.provider);
@@ -204,6 +214,7 @@ export function resolveModel(config: ModelConfig) {
         name: config.provider,
         baseURL: connection.baseURL,
         apiKey: connection.apiKey,
+        fetch: providerFetch,
         supportsStructuredOutputs: true,
       }).chatModel(config.model);
     }

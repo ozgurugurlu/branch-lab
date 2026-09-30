@@ -10,5 +10,6 @@ export default defineConfig([
     "coverage/**",
     "playwright-report/**",
     "test-results/**",
+    "ai-coworker-demo-staging/**",
   ]),
 ]);

@@ -9,8 +9,8 @@ import type {
   World,
 } from "@/lib/types";
 
-export const ENGINE_VERSION = "0.1.0";
-export const PROMPT_VERSION = "2026-09-30.1";
+export const ENGINE_VERSION = "0.3.0";
+export const PROMPT_VERSION = "2026-09-30.3";
 export const MEMORY_LIMIT = 8;
 export const SOURCE_CONTEXT_BUDGET = 24_000;
 export const SOURCE_DOCUMENT_LIMIT = 6000;
@@ -36,6 +36,9 @@ export const actorSchema = z
     influence: z.number().finite().min(0).max(1),
     sourceIds,
     memory: z.array(z.string().min(1).max(800)).max(MEMORY_LIMIT),
+    capabilityProfile: z
+      .enum(["community", "research", "operations", "policy"])
+      .optional(),
   })
   .strict();
 export const relationshipSchema = z
@@ -107,6 +110,34 @@ function assertReferences(
     throw new Error(`Unknown or inaccessible ${label}.`);
 }
 
+/** Source visibility is enforced before prompt assembly, never delegated to a model. */
+export function actorVisibleSources(sources: Source[]): Source[] {
+  return sources.filter((source) => source.access !== "analyst-only");
+}
+
+/** Check citation-shaped prose too; ordinary brackets such as [draft] are not citations. */
+function assertInlineReferences(
+  texts: string[],
+  allowed: Set<string>,
+  declared: Set<string>,
+) {
+  for (const text of texts) {
+    for (const match of text.matchAll(/\[([a-zA-Z0-9_-]+)\]/g)) {
+      const reference = match[1];
+      if (
+        !reference.startsWith("source-") &&
+        !/-r\d+-/.test(reference) &&
+        !allowed.has(reference)
+      )
+        continue;
+      if (!allowed.has(reference) || !declared.has(reference))
+        throw new Error(
+          "Unknown, inaccessible, or undeclared inline citation.",
+        );
+    }
+  }
+}
+
 export function validateWorld(
   raw: unknown,
   sources: Source[],
@@ -121,7 +152,9 @@ export function validateWorld(
     "actor IDs",
   );
   const actors = new Set(world.actors.map((actor) => actor.id));
-  const sourceSet = new Set(sources.map((source) => source.id));
+  const sourceSet = new Set(
+    actorVisibleSources(sources).map((source) => source.id),
+  );
   world.actors.forEach((actor) =>
     assertReferences(actor.sourceIds, sourceSet, "source IDs"),
   );
@@ -195,7 +228,12 @@ export function observeActor(
     actorId,
     ...neighbors.map((neighbor) => neighbor.id),
   ]);
-  const visibleSources = new Set(actor.sourceIds);
+  const assignableSources = new Set(
+    actorVisibleSources(simulation.sources).map((source) => source.id),
+  );
+  const visibleSources = new Set(
+    actor.sourceIds.filter((sourceId) => assignableSources.has(sourceId)),
+  );
   const publicEvents = simulation.rounds
     .slice(-2)
     .flatMap((round) => round.events)
@@ -223,7 +261,7 @@ export function observeActor(
     question: simulation.question,
     context: simulation.context,
     round: simulation.rounds.length + 1,
-    actor,
+    actor: { ...actor, sourceIds: [...visibleSources] },
     neighbors,
     publicEvents,
     rememberedEventIds,
@@ -294,6 +332,18 @@ export function validateAction(
     new Set(observation.sources.map((source) => source.id)),
     "source IDs",
   );
+  const visibleEvents = [
+    ...observation.publicEvents.map((event) => event.id),
+    ...observation.rememberedEventIds,
+  ];
+  assertInlineReferences(
+    [action.content],
+    new Set([
+      ...visibleEvents,
+      ...observation.sources.map((source) => source.id),
+    ]),
+    new Set([...visibleEvents, ...action.sourceIds]),
+  );
   return action;
 }
 
@@ -306,7 +356,20 @@ export function validateReport(raw: unknown, simulation: Simulation): Report {
     assertReferences(finding.eventIds, events, "event IDs");
     if (events.size > 0 && finding.eventIds.length === 0)
       throw new Error("Report finding has no supporting event.");
+    assertInlineReferences(
+      [finding.title, finding.detail],
+      new Set([...events, ...sources]),
+      new Set([...finding.eventIds, ...report.sourceIds]),
+    );
   }
+  assertInlineReferences(
+    [report.headline, report.summary, ...report.uncertainties],
+    new Set([...events, ...sources]),
+    new Set([
+      ...report.findings.flatMap((finding) => finding.eventIds),
+      ...report.sourceIds,
+    ]),
+  );
   return report;
 }
 
@@ -318,5 +381,10 @@ export function validateInterview(
   const reply = interviewSchema.parse(raw);
   assertReferences(reply.eventIds, new Set(eventIds), "event IDs");
   assertReferences(reply.sourceIds, new Set(visibleSourceIds), "source IDs");
+  assertInlineReferences(
+    [reply.answer],
+    new Set([...eventIds, ...visibleSourceIds]),
+    new Set([...reply.eventIds, ...reply.sourceIds]),
+  );
   return reply;
 }

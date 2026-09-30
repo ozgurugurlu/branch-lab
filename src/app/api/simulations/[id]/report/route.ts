@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { reportInputSchema } from "@/lib/schemas";
 import { api, body, withDeadline } from "@/server/http";
 import { reportSimulation } from "@/server/simulations";
 
@@ -11,10 +11,10 @@ export async function POST(
   return api(
     request,
     async ({ owner }) => {
-      await body(request, z.object({}).strict());
+      const { requestId } = await body(request, reportInputSchema);
       const { id } = await context.params;
       return withDeadline(request, (signal) =>
-        reportSimulation(id, owner, signal),
+        reportSimulation(id, owner, signal, requestId),
       );
     },
     { mutation: true },

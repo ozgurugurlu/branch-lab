@@ -212,3 +212,63 @@ describe("local endpoint boundaries", () => {
     },
   );
 });
+
+describe("provider transport privacy", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["openai", "gpt-6-luna", "https://api.openai.com/v1/responses"],
+    [
+      "google",
+      "gemini-3.8-flash",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    ],
+    ["ollama", "qwen3:8b", "http://127.0.0.1:11434/v1/chat/completions"],
+    ["lmstudio", "local-model", "http://127.0.0.1:1234/v1/chat/completions"],
+  ] as const)(
+    "pins the %s endpoint and refuses automatic prompt-bearing redirects",
+    async (provider, modelId, endpoint) => {
+      vi.stubEnv("OPENAI_API_KEY", "unit-test-key");
+      vi.stubEnv("GEMINI_API_KEY", "unit-test-key");
+      vi.stubEnv("ENABLE_LOCAL_MODELS", "true");
+      vi.stubEnv("OPENAI_BASE_URL", "https://unexpected-proxy.example/v1");
+      const fetchSpy = vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(new Error("Offline transport interception"));
+      vi.stubGlobal("fetch", fetchSpy);
+      const model = resolveModel({ provider, model: modelId }) as unknown as {
+        doGenerate(options: {
+          prompt: { role: "user"; content: { type: "text"; text: string }[] }[];
+        }): Promise<unknown>;
+      };
+      await expect(
+        model.doGenerate({
+          prompt: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Private fixture source text" }],
+            },
+          ],
+        }),
+      ).rejects.toBeDefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(String(fetchSpy.mock.calls[0][0])).toBe(endpoint);
+      expect(fetchSpy.mock.calls[0][1]?.redirect).toBe("error");
+    },
+  );
+
+  it.each([
+    "http://2130706433:11434/v1",
+    "http://0x7f000001:11434/v1",
+    "https://[::ffff:7f00:1]/v1",
+    "https://127.1/v1",
+  ])("rejects alternate hosted private-address syntax %s", (endpoint) => {
+    vi.stubEnv("ENABLE_LOCAL_MODELS", "true");
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("OLLAMA_BASE_URL", endpoint);
+    vi.stubEnv("OLLAMA_API_KEY", "unit-test-key");
+    expect(() =>
+      resolveModel({ provider: "ollama", model: "qwen3:8b" }),
+    ).toThrow("Hosted deployments");
+  });
+});

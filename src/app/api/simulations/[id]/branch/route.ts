@@ -16,6 +16,7 @@ export async function POST(
         owner,
         input.intervention,
         input.title,
+        input.requestId,
       );
     },
     { mutation: true },
