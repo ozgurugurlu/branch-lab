@@ -1,0 +1,50 @@
+{
+  "name": "branchlab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An open-source laboratory for multi-agent scenario simulation.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "postbuild": "node scripts/prepare-standalone.mjs",
+    "start": "node scripts/start.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "4.0.86",
+    "@ai-sdk/openai": "4.0.82",
+    "@ai-sdk/openai-compatible": "3.0.60",
+    "@fontsource-variable/dm-sans": "5.3.0",
+    "@fontsource/instrument-serif": "5.3.0",
+    "@libsql/client": "0.18.0",
+    "@mastra/core": "1.72.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.3.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^22.19.15",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "16.3.7",
+    "prettier": "3.9.9",
+    "typescript": "^5.9.3",
+    "vitest": "5.0.3"
+  }
+}

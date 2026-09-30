@@ -1,0 +1,275 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { CreateSimulationInput, Simulation, Source } from "@/lib/types";
+import {
+  buildWorld,
+  executeRound,
+  answerQuestion,
+  generateReport,
+} from "@/mastra/simulation";
+import { ENGINE_VERSION, PROMPT_VERSION } from "@/mastra/domain";
+import { isSupportedModel } from "@/lib/providers";
+import { getProviderStatuses } from "./models";
+import { AppError } from "./errors";
+import {
+  acquireLease,
+  commitLease,
+  insertSimulation,
+  readSimulation,
+  releaseLease,
+  type Lease,
+} from "./store";
+import { consumeLimit, reserveModelCalls } from "./security";
+
+async function ensureModel(
+  input: { model: Simulation["model"] },
+  owner: string,
+  calls: number,
+) {
+  if (!isSupportedModel(input.model))
+    throw new AppError(
+      "INVALID_MODEL",
+      "Choose a supported model or a valid installed local model identifier.",
+    );
+  const provider = getProviderStatuses().find(
+    (p) => p.id === input.model.provider,
+  );
+  if (!provider?.configured)
+    throw new AppError(
+      "PROVIDER_NOT_CONFIGURED",
+      provider?.reason ||
+        "Configure this model provider in the server environment.",
+      400,
+    );
+  if (
+    ["openai", "google"].includes(input.model.provider) &&
+    !provider.models.some((m) => m.id === input.model.model)
+  )
+    throw new AppError(
+      "INVALID_MODEL",
+      "Choose one of the configured cloud model presets.",
+    );
+  if (input.model.provider !== "demo") await reserveModelCalls(owner, calls);
+}
+
+export async function createSimulation(
+  input: CreateSimulationInput,
+  owner: string,
+  signal: AbortSignal,
+) {
+  await consumeLimit(`create:${owner}`, 30, 60 * 60 * 1000);
+  await ensureModel(input, owner, 1);
+  const sources: Source[] = input.sources.map((s, i) => ({
+    ...s,
+    id: `source-${i + 1}`,
+    hash: createHash("sha256").update(s.content).digest("hex"),
+  }));
+  const world = await buildWorld(input, sources, signal);
+  signal.throwIfAborted();
+  const now = new Date().toISOString();
+  const simulation: Simulation = {
+    id: randomUUID(),
+    title: input.title,
+    question: input.question,
+    context: input.context,
+    model: input.model,
+    seed: input.seed,
+    maxRounds: input.maxRounds,
+    initialWorld: structuredClone(world),
+    world,
+    sources,
+    rounds: [],
+    interventions: [],
+    messages: [],
+    report: null,
+    status: "ready",
+    createdAt: now,
+    updatedAt: now,
+    parentId: null,
+    forkRound: null,
+    version: 0,
+    usage: { modelCalls: input.model.provider === "demo" ? 0 : 1 },
+    manifest: { engineVersion: ENGINE_VERSION, promptVersion: PROMPT_VERSION },
+  };
+  return insertSimulation(simulation, owner);
+}
+
+async function mutate(
+  id: string,
+  owner: string,
+  update: (simulation: Simulation, lease: Lease) => Promise<Simulation>,
+) {
+  const lease = await acquireLease(id, owner);
+  try {
+    return await commitLease(
+      lease,
+      await update(lease.simulation, lease),
+      owner,
+    );
+  } finally {
+    await releaseLease(id, owner, lease.token);
+  }
+}
+
+export async function stepSimulation(
+  id: string,
+  owner: string,
+  expectedRound: number,
+  signal: AbortSignal,
+) {
+  const current = await readSimulation(id, owner);
+  if (expectedRound < current.rounds.length) return current;
+  if (expectedRound > current.rounds.length)
+    throw new AppError(
+      "ROUND_MISMATCH",
+      "Reload the saved run before advancing its next round.",
+      409,
+      true,
+    );
+  if (current.rounds.length >= current.maxRounds) return current;
+  return mutate(id, owner, async (simulation) => {
+    if (expectedRound !== simulation.rounds.length)
+      throw new AppError(
+        "ROUND_MISMATCH",
+        "The run advanced in another request. Reload the saved state.",
+        409,
+        true,
+      );
+    await ensureModel(simulation, owner, simulation.world.actors.length);
+    const round = await executeRound(simulation, signal);
+    signal.throwIfAborted();
+    if (round.number !== simulation.rounds.length + 1)
+      throw new AppError(
+        "INVALID_ROUND",
+        "The engine returned an invalid round number.",
+        500,
+      );
+    return {
+      ...simulation,
+      rounds: [...simulation.rounds, round],
+      world: { ...simulation.world, actors: round.actors },
+      report: null,
+      status: round.number >= simulation.maxRounds ? "completed" : "ready",
+      usage: { modelCalls: simulation.usage.modelCalls + round.modelCalls },
+    };
+  });
+}
+
+export async function branchSimulation(
+  id: string,
+  owner: string,
+  intervention: string,
+  title?: string,
+) {
+  await consumeLimit(`create:${owner}`, 30, 60 * 60 * 1000);
+  // A read is a consistent completed checkpoint even while a new round is in flight.
+  const parent = await readSimulation(id, owner);
+  if (parent.rounds.length >= 24)
+    throw new AppError(
+      "ROUND_LIMIT",
+      "This branch reached the 24-round limit. Start a new scenario to continue.",
+    );
+  const now = new Date().toISOString();
+  const child: Simulation = {
+    ...structuredClone(parent),
+    id: randomUUID(),
+    title: title || `${parent.title.slice(0, 83)} · branch`,
+    createdAt: now,
+    updatedAt: now,
+    parentId: parent.id,
+    forkRound: parent.rounds.length,
+    version: 0,
+    status: "ready",
+    maxRounds: Math.min(24, parent.rounds.length + 3),
+    report: null,
+    messages: [],
+    interventions: [
+      ...parent.interventions,
+      {
+        id: randomUUID(),
+        afterRound: parent.rounds.length,
+        content: intervention,
+      },
+    ],
+  };
+  return insertSimulation(child, owner);
+}
+
+export async function chatSimulation(
+  id: string,
+  owner: string,
+  message: string,
+  actorId: string | undefined,
+  signal: AbortSignal,
+) {
+  return mutate(id, owner, async (simulation) => {
+    if (simulation.messages.length >= 80)
+      throw new AppError(
+        "CHAT_LIMIT",
+        "This run reached 40 questions. Export the conversation or continue in a new branch.",
+      );
+    if (actorId && !simulation.world.actors.some((a) => a.id === actorId))
+      throw new AppError(
+        "INVALID_ACTOR",
+        "Select an actor in this simulation.",
+      );
+    await ensureModel(simulation, owner, 1);
+    const response = await answerQuestion(simulation, message, actorId, signal);
+    signal.throwIfAborted();
+    const now = new Date().toISOString();
+    return {
+      ...simulation,
+      messages: [
+        ...simulation.messages,
+        {
+          id: randomUUID(),
+          role: "user" as const,
+          content: message,
+          actorId: actorId || null,
+          createdAt: now,
+          round: simulation.rounds.length,
+        },
+        {
+          id: randomUUID(),
+          role: "assistant" as const,
+          content: response,
+          actorId: actorId || null,
+          createdAt: now,
+          round: simulation.rounds.length,
+        },
+      ],
+      usage: {
+        modelCalls:
+          simulation.usage.modelCalls +
+          (simulation.model.provider === "demo" ? 0 : 1),
+      },
+    };
+  });
+}
+
+export async function reportSimulation(
+  id: string,
+  owner: string,
+  signal: AbortSignal,
+) {
+  const current = await readSimulation(id, owner);
+  if (current.report) return current;
+  if (!current.rounds.length)
+    throw new AppError(
+      "NO_ROUNDS",
+      "Complete at least one round before generating a report.",
+    );
+  return mutate(id, owner, async (simulation) => {
+    await ensureModel(simulation, owner, 1);
+    const report = await generateReport(simulation, signal);
+    signal.throwIfAborted();
+    return {
+      ...simulation,
+      report,
+      usage: {
+        modelCalls:
+          simulation.usage.modelCalls +
+          (simulation.model.provider === "demo" ? 0 : 1),
+      },
+    };
+  });
+}
