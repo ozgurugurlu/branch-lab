@@ -109,6 +109,8 @@ let failureMode:
 let closedStalls = 0;
 let active = 0;
 let peak = 0;
+let actorRequestBarrier:
+  ((actorId: string, response: ServerResponse) => Promise<void>) | undefined;
 
 function messageText(request: ChatRequest) {
   return request.messages
@@ -273,6 +275,7 @@ beforeEach(async () => {
   active = 0;
   peak = 0;
   closedStalls = 0;
+  actorRequestBarrier = undefined;
   server = createServer(async (request, response) => {
     active++;
     peak = Math.max(peak, active);
@@ -285,6 +288,10 @@ beforeEach(async () => {
       const payload = scenarioPayload(data);
       captured.push({ request: data, payload, text: messageText(data) });
       const actor = payload.actor as Actor | undefined;
+      if (actor && actorRequestBarrier) {
+        await actorRequestBarrier(actor.id, response);
+        if (response.destroyed) return;
+      }
       if (
         actor &&
         (failureMode === "stall" ||
@@ -315,9 +322,6 @@ beforeEach(async () => {
           }),
         );
       } else {
-        // A tiny delay makes actual parallel actor requests observable without slowing the test suite.
-        if (payload.actor)
-          await new Promise((resolve) => setTimeout(resolve, 10));
         const reply = structuredReply(payload);
         if (actor && failureMode === "forged-citation")
           Object.assign(reply, {
@@ -615,6 +619,27 @@ describe("real provider to Mastra workflow protocol", () => {
         capabilityProfile: capabilityProfileFor(actor),
       })),
     });
+    // Hold the initial actor responses until all three worker requests arrive.
+    // A sequential runner cannot open this gate; no scheduling delay proves concurrency.
+    const overlappingActors = new Set<string>();
+    let release!: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    actorRequestBarrier = async (actorId, response) => {
+      if (overlappingActors.size === 3) return;
+      overlappingActors.add(actorId);
+      if (overlappingActors.size === 3) release();
+      await new Promise<void>((resolve) => {
+        // Release a held handler on cancellation as well, so failed tests clean up.
+        const onClose = () => resolve();
+        response.once("close", onClose);
+        void arrived.then(() => {
+          response.off("close", onClose);
+          resolve();
+        });
+      });
+    };
     const round = await executeRound(simulation, AbortSignal.timeout(4000));
     expect(round.modelCalls).toBe(8);
     expect(round.execution).toEqual({
@@ -628,7 +653,10 @@ describe("real provider to Mastra workflow protocol", () => {
       ),
     ).toBe(true);
     expect(peak).toBeLessThanOrEqual(3);
-    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBe(3);
+    expect(overlappingActors).toEqual(
+      new Set(["actor-1", "actor-2", "actor-3"]),
+    );
     const actorRequests = captured.filter((entry) => entry.payload.actor);
     expect(actorRequests).toHaveLength(8);
     for (const entry of actorRequests) {
