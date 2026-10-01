@@ -585,13 +585,13 @@ export function ChatWorkspace(props: Props) {
                       Branch scenario
                     </button>
                     <button
-                      className="icon-button"
-                      title="Run one round"
+                      className="button secondary small"
+                      title="Run a single round and pause"
                       aria-label="Run one round"
                       disabled={disabled || !canRun}
                       onClick={() => void props.onRun(false)}
                     >
-                      <SkipForward size={15} />
+                      <SkipForward size={15} /> Run one round
                     </button>
                     {props.running ? (
                       <button
@@ -610,7 +610,7 @@ export function ChatWorkspace(props: Props) {
                         {canRun ? <Play size={12} /> : <Check size={13} />}{" "}
                         {canRun
                           ? simulation.rounds.length
-                            ? "Continue"
+                            ? "Resume simulation"
                             : "Run simulation"
                           : "Completed"}
                       </button>
@@ -630,7 +630,9 @@ export function ChatWorkspace(props: Props) {
                   <p className="conversation-operation-note" role="status">
                     {props.pauseRequested
                       ? "Pause requested. This round will finish and be saved; the next round will not start."
-                      : "Each completed round is saved. You can pause after the current round."}
+                      : props.running
+                        ? `Running round ${simulation.rounds.length + 1} of ${simulation.maxRounds}. Remaining rounds and the report will follow automatically.`
+                        : "Running one round. Each completed round is saved."}
                   </p>
                 )}
                 {actor && (

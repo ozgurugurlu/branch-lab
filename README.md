@@ -18,7 +18,7 @@ Built with **Next.js, React, TypeScript and Mastra**. Use OpenAI or Gemini, conn
 
 Use that question to explore a world of households, workers, businesses and policymakers. Define what the robots can do, who pays for them, and what rules apply. Add supporting material when you want the actors to consider specific evidence.
 
-1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Submitting detailed setup closes the dialog and shows creation progress in chat, then leaves the world ready for review. Starting a demo or local-model scenario directly from the composer also runs its configured rounds automatically; you can pause between rounds.
+1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Starting from the composer or detailed setup shows progress in chat, runs every configured round automatically, then writes the report. You can pause after the current round; **Resume simulation** continues through all remaining rounds. **Run one round** is an explicit manual control.
 2. **Watch it unfold.** Run a round or a bounded sequence. The chat shows actual execution progress: which phase is running, which permitted tools agents use, and when results are saved. When a run you start reaches its round limit, Branchlab prepares the analyst report in chat.
 3. **Ask about the outcome.** Interview a worker about its response or ask the analyst to explain the simulated shift in support. Inspect the actors, events and cited material behind the answer.
 4. **Change one condition.** For example, introduce a rule that robots cannot replace paid care workers. Branch from the latest completed state and advance that alternative.

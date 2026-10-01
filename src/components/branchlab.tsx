@@ -368,6 +368,7 @@ export function Branchlab() {
     if (
       operationBusy.current ||
       !online ||
+      !navigator.onLine ||
       start.rounds.length >= start.maxRounds
     )
       return;
@@ -423,7 +424,7 @@ export function Branchlab() {
   }
   function create(
     input: CreateSimulationInput,
-    runImmediately = false,
+    runImmediately = true,
     previous?: PendingCreation,
   ) {
     if (operationBusy.current || loading || !online)
@@ -1126,13 +1127,13 @@ export function Branchlab() {
                 </div>
                 <div className="playback-controls">
                   <button
-                    className="icon-button outlined"
+                    className="button secondary"
                     aria-label="Run one round"
-                    title="Run one round"
+                    title="Run a single round and pause"
                     disabled={!canStep || Boolean(busy) || !online}
                     onClick={() => void step(simulation)}
                   >
-                    <SkipForward size={16} />
+                    <SkipForward size={16} /> Run one round
                   </button>
                   {running ? (
                     <button className="button primary" onClick={stop}>
@@ -1155,7 +1156,7 @@ export function Branchlab() {
                         ? "Finishing round"
                         : canStep
                           ? simulation.rounds.length
-                            ? "Continue"
+                            ? "Resume simulation"
                             : "Run simulation"
                           : "Completed"}
                     </button>

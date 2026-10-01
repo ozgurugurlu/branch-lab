@@ -626,7 +626,9 @@ export function NewSimulationDialog({
           <InlineRequestError error={error} context="draft" />
         </fieldset>
         <div className="dialog-footer">
-          <span>Explore possibilities. Make assumptions visible.</span>
+          <span>
+            All {rounds} rounds run automatically, followed by a report.
+          </span>
           <button
             className="button primary"
             disabled={

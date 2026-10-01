@@ -28,9 +28,161 @@ async function demo(page: Page) {
   await expect(page.getByLabel("Message analyst")).toBeEnabled();
 }
 
+/** Prepare a saved checkpoint without coupling control tests to creation-form defaults. */
+async function savedUnstartedRun(page: Page, title: string, maxRounds = 4) {
+  const config = (await (await page.request.get("/api/config")).json()).data;
+  const model = config.providers.find(
+    (provider: { id: string }) => provider.id === "demo",
+  ).models[0].id;
+  const response = await page.request.post("/api/simulations", {
+    data: {
+      title,
+      question: "How might residents respond to a shared community garden?",
+      context: "A fictional neighborhood considers a reversible garden pilot.",
+      actorCount: 4,
+      maxRounds,
+      seed: 42,
+      sources: [],
+      model: { provider: "demo", model },
+      privacy: { allowCloud: false, allowWebSearch: false },
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const saved = (await response.json()).data;
+  expect(saved.rounds).toHaveLength(0);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: title, exact: true }),
+  ).toBeVisible();
+  return saved.id as string;
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await unlock(page);
+});
+
+test("one Run simulation click completes all saved rounds sequentially and writes one report", async ({
+  page,
+}) => {
+  const id = await savedUnstartedRun(page, "Run all remaining rounds");
+  const steps: { expectedRound: number; requestId: string }[] = [];
+  const reports: { expectedRound: number }[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST") return;
+    if (request.url().endsWith(`/simulations/${id}/step`))
+      steps.push(request.postDataJSON());
+    if (request.url().endsWith(`/simulations/${id}/report`))
+      reports.push(request.postDataJSON());
+  });
+
+  await page
+    .getByRole("button", { name: "Run simulation", exact: true })
+    .click();
+  // No further click is issued: intermediate resume buttons must not be required.
+  await expect(
+    page.getByText("4 of 4 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(steps.map((step) => step.expectedRound)).toEqual([0, 1, 2, 3]);
+  expect(new Set(steps.map((step) => step.requestId)).size).toBe(4);
+  expect(reports).toHaveLength(1);
+  expect(reports[0].expectedRound).toBe(4);
+  const saved = (
+    await (await page.request.get(`/api/simulations/${id}`)).json()
+  ).data;
+  expect(saved.rounds.map((round: { number: number }) => round.number)).toEqual(
+    [1, 2, 3, 4],
+  );
+  expect(saved.report.answer).toBeTruthy();
+});
+
+test("one Resume simulation click after a deliberate pause finishes every remaining round", async ({
+  page,
+}) => {
+  const id = await savedUnstartedRun(page, "Resume all remaining rounds");
+  const steps: number[] = [];
+  let reports = 0;
+  let firstRoundSaved = false;
+  let release!: () => void;
+  const firstResponse = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      request.url().endsWith(`/simulations/${id}/report`)
+    )
+      reports++;
+  });
+  await page.route(`**/api/simulations/${id}/step`, async (route) => {
+    const expectedRound = route.request().postDataJSON()
+      .expectedRound as number;
+    steps.push(expectedRound);
+    const response = await route.fetch();
+    if (expectedRound === 0) {
+      firstRoundSaved = response.ok();
+      await firstResponse;
+    }
+    await route.fulfill({ response });
+  });
+  try {
+    await page
+      .getByRole("button", { name: "Run simulation", exact: true })
+      .click();
+    await expect.poll(() => firstRoundSaved).toBe(true);
+    await page
+      .getByRole("button", {
+        name: "Pause simulation after current round",
+        exact: true,
+      })
+      .click();
+  } finally {
+    release();
+  }
+  await expect(
+    page.getByText("1 of 4 rounds complete", { exact: true }),
+  ).toBeVisible();
+  const resume = page.getByRole("button", {
+    name: "Resume simulation",
+    exact: true,
+  });
+  await expect(resume).toBeEnabled();
+  expect(steps).toEqual([0]);
+  expect(reports).toBe(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await resume.scrollIntoViewIfNeeded();
+  for (const control of [
+    resume,
+    page.getByRole("button", { name: "Run one round", exact: true }),
+  ]) {
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/resume-controls-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+
+  await resume.click();
+  await expect(
+    page.getByText("4 of 4 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(steps).toEqual([0, 1, 2, 3]);
+  expect(reports).toBe(1);
 });
 
 test("finishing a run writes its answer into chat while the composer stays available", async ({
@@ -226,12 +378,6 @@ test("pausing the final round defers the report and reopening never starts infer
     .fill("How would a neighborhood respond to a shared community garden?");
   await page.getByRole("button", { name: /Simulation parameters/ }).click();
   await page.getByLabel("Rounds", { exact: true }).fill("1");
-  await page
-    .getByRole("button", { name: "Create simulation", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Run simulation", exact: true }),
-  ).toBeEnabled();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -250,7 +396,7 @@ test("pausing the final round defers the report and reopening never starts infer
   });
   try {
     await page
-      .getByRole("button", { name: "Run simulation", exact: true })
+      .getByRole("button", { name: "Create simulation", exact: true })
       .click();
     await expect.poll(() => roundSaved).toBe(true);
     await page
@@ -283,17 +429,7 @@ test("pausing the final round defers the report and reopening never starts infer
 test("advancing after a lost partial report creates a fresh final report identity", async ({
   page,
 }) => {
-  await page
-    .getByRole("button", { name: "Add sources and configure scenario" })
-    .click();
-  await page
-    .getByLabel("What do you want to explore?")
-    .fill("How could a town adapt to a shared library of household tools?");
-  await page.getByRole("button", { name: /Simulation parameters/ }).click();
-  await page.getByLabel("Rounds", { exact: true }).fill("2");
-  await page
-    .getByRole("button", { name: "Create simulation", exact: true })
-    .click();
+  await savedUnstartedRun(page, "Partial report checkpoint", 2);
   const step = page.getByRole("button", { name: "Run one round", exact: true });
   await expect(step).toBeEnabled();
   await step.click();
@@ -490,6 +626,9 @@ test("unnamed scenarios and branches persist without copying their prompts into 
   await expect(page.locator(".conversation-user-message")).toContainText(
     question,
   );
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "Branch scenario", exact: true })
     .click();
@@ -644,7 +783,9 @@ test("chat, inspect, interview, branch, report, export and unlock persisted simu
       exact: true,
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Resume simulation", exact: true })
+    .click();
   await expect(
     page.getByText("9 of 9 rounds complete", { exact: true }),
   ).toBeVisible();
@@ -730,11 +871,11 @@ test("imported source permissions survive creation, while delete failures are re
   await expect(
     page.getByRole("heading", { name: "Community solar pilot", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Run one round", exact: true })
-    .click();
   await expect(
-    page.getByText("1 of 2 rounds complete", { exact: true }),
+    page.getByText("2 of 2 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
   ).toBeVisible();
   await page.getByRole("button", { name: "Sources", exact: true }).click();
   await expect(page.getByText("brief.md", { exact: true })).toBeVisible();
@@ -863,12 +1004,6 @@ test("pause saves the current round and workspace erasure clears private state",
   await page.getByRole("button", { name: /Simulation parameters/ }).click();
   await page.getByLabel("Actors", { exact: true }).fill("4");
   await page.getByLabel("Rounds", { exact: true }).fill("2");
-  await page
-    .getByRole("button", { name: "Create simulation", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Pause and erase check", exact: true }),
-  ).toBeVisible();
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
@@ -879,22 +1014,34 @@ test("pause saves the current round and workspace erasure clears private state",
     await pending;
     await route.continue();
   });
-  await page
-    .getByRole("button", { name: "Run simulation", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "New chat", exact: true }),
-  ).toBeDisabled();
-  await page.getByRole("button", { name: "Pause", exact: true }).click();
-  await expect(
-    page.getByText(/Pause requested\. This round will finish/),
-  ).toBeVisible();
-  release();
+  try {
+    await page
+      .getByRole("button", { name: "Create simulation", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Pause and erase check", exact: true }),
+    ).toBeVisible();
+    await expect.poll(() => steps).toBe(1);
+    await expect(
+      page.getByRole("button", { name: "New chat", exact: true }),
+    ).toBeDisabled();
+    await page
+      .getByRole("button", {
+        name: "Pause simulation after current round",
+        exact: true,
+      })
+      .click();
+    await expect(
+      page.getByText(/Pause requested\. This round will finish/),
+    ).toBeVisible();
+  } finally {
+    release();
+  }
   await expect(
     page.getByText("1 of 2 rounds complete", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Continue", exact: true }),
+    page.getByRole("button", { name: "Resume simulation", exact: true }),
   ).toBeEnabled();
   expect(steps).toBe(1);
   await page
@@ -968,6 +1115,11 @@ test("creation leaves the form immediately and shows recorded progress in the ch
     releaseResponse = resolve;
   });
   let created = false;
+  const steps: number[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/step"))
+      steps.push(request.postDataJSON().expectedRound);
+  });
   await page.route("**/api/simulations", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     const response = await route.fetch();
@@ -982,6 +1134,9 @@ test("creation leaves the form immediately and shows recorded progress in the ch
     .click();
   await page.getByLabel("Simulation name").fill("A robot in every home");
   await page.getByLabel("What do you want to explore?").fill(question);
+  await page.getByRole("button", { name: /Simulation parameters/ }).click();
+  await page.getByLabel("Actors", { exact: true }).fill("4");
+  await page.getByLabel("Rounds", { exact: true }).fill("3");
   try {
     await page
       .getByRole("button", { name: "Create simulation", exact: true })
@@ -1036,8 +1191,12 @@ test("creation leaves the form immediately and shows recorded progress in the ch
   ).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Run one round", exact: true }),
-  ).toBeEnabled();
+    page.getByText("3 of 3 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(steps).toEqual([0, 1, 2]);
 });
 
 test("a lost creation response keeps the full draft and retries without duplicating the simulation", async ({
@@ -1112,6 +1271,12 @@ test("a lost creation response keeps the full draft and retries without duplicat
     .click();
   await expect(
     page.getByRole("heading", { name: "Robots with boundaries", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("2 of 2 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
   ).toBeVisible();
   expect(bodies).toHaveLength(2);
   expect(bodies[0].requestId).toBeTruthy();
@@ -1346,6 +1511,9 @@ test("creation authentication failures allow unlock without discarding the draft
     .click();
   await expect(
     page.getByRole("heading", { name: "Resume after unlock", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
   ).toBeVisible();
   expect(submissions).toHaveLength(2);
   expect(submissions[0].requestId).toBeTruthy();
