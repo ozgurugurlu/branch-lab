@@ -54,6 +54,11 @@ async function savedUnstartedRun(page: Page, title: string, maxRounds = 4) {
   await expect(
     page.getByRole("heading", { name: title, exact: true }),
   ).toBeVisible();
+  await expect(
+    page
+      .getByRole("navigation", { name: "Saved chats" })
+      .getByRole("button", { name: title, exact: true }),
+  ).toBeVisible();
   return saved.id as string;
 }
 
@@ -97,6 +102,279 @@ test("one Run simulation click completes all saved rounds sequentially and write
     [1, 2, 3, 4],
   );
   expect(saved.report.answer).toBeTruthy();
+});
+
+for (const operationState of ["completed", "running"] as const) {
+  test(`one Start survives reload after a committed round and reconciles a ${operationState} operation`, async ({
+    page,
+  }) => {
+    const steps: { expectedRound: number; requestId: string }[] = [];
+    let simulationId = "";
+    let firstRoundSaved = false;
+    let reports = 0;
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/report"))
+        reports++;
+    });
+    await page.route("**/api/simulations/*/step", async (route) => {
+      const body = route.request().postDataJSON();
+      steps.push(body);
+      simulationId = new URL(route.request().url()).pathname.split("/").at(-2)!;
+      const response = await route.fetch();
+      if (body.expectedRound === 0) {
+        firstRoundSaved = response.ok();
+        await responseGate;
+        // Reload deliberately discards this response; the saved checkpoint is authoritative.
+        await route.abort().catch(() => {});
+      } else await route.fulfill({ response });
+    });
+
+    let runningFeedReads = 0;
+    let reportRunning = operationState === "running";
+    try {
+      await page
+        .getByLabel("Describe a scenario")
+        .fill(
+          "How could a neighborhood adapt to a shared garden and tool library?",
+        );
+      await page
+        .getByRole("button", { name: "Start simulation", exact: true })
+        .click();
+      await expect.poll(() => firstRoundSaved).toBe(true);
+      expect(steps).toHaveLength(1);
+      expect(steps[0].requestId).toBeTruthy();
+      expect(
+        await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("branchlab-auto-run-v1") ?? "null"),
+        ),
+      ).toMatchObject({
+        simulationId,
+        pending: {
+          kind: "step",
+          expectedRound: 0,
+          requestId: steps[0].requestId,
+        },
+      });
+      if (operationState === "running") {
+        // Browser-contract fixture: model the server still reporting the pending operation.
+        // Backend tests separately verify real checkpoint/journal atomicity.
+        await page.route(
+          `**/api/operations/${steps[0].requestId}/trace`,
+          async (route) => {
+            const response = await route.fetch();
+            const payload = await response.json();
+            if (reportRunning) {
+              runningFeedReads++;
+              payload.data.operations = payload.data.operations.map(
+                (operation: { kind: string }) =>
+                  operation.kind === "step"
+                    ? { ...operation, status: "running", finishedAt: null }
+                    : operation,
+              );
+            }
+            await route.fulfill({ response, json: payload });
+          },
+        );
+      }
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page.reload();
+      if (operationState === "running") {
+        await expect.poll(() => runningFeedReads).toBeGreaterThanOrEqual(2);
+        expect(steps.map((step) => step.expectedRound)).toEqual([0]);
+        expect(reports).toBe(0);
+        reportRunning = false;
+      }
+    } finally {
+      reportRunning = false;
+      releaseResponse();
+    }
+
+    await expect(
+      page.getByText("6 of 6 rounds complete", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".conversation-report .research-report"),
+    ).toBeVisible();
+    expect(steps.map((step) => step.expectedRound)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(new Set(steps.map((step) => step.requestId)).size).toBe(6);
+    expect(reports).toBe(1);
+    const saved = (
+      await (await page.request.get(`/api/simulations/${simulationId}`)).json()
+    ).data;
+    expect(
+      saved.rounds.map((round: { number: number }) => round.number),
+    ).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(saved.version).toBe(7);
+    const feed = (
+      await (
+        await page.request.get(`/api/simulations/${simulationId}/trace`)
+      ).json()
+    ).data;
+    const operations = feed.operations.filter(
+      (operation: { kind: string }) => operation.kind === "step",
+    );
+    expect(operations).toHaveLength(6);
+    expect(
+      operations.every(
+        (operation: { status: string; attempt: number }) =>
+          operation.status === "completed" && operation.attempt === 1,
+      ),
+    ).toBe(true);
+  });
+}
+
+for (const stage of ["creation", "report"] as const) {
+  test(`reload during a committed ${stage} response completes the original Start without duplicate work`, async ({
+    page,
+  }) => {
+    let creates = 0;
+    let reports = 0;
+    const steps: number[] = [];
+    let heldResultSaved = false;
+    let heldRequestId = "";
+    let simulationId = "";
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/simulations") creates++;
+      if (path.endsWith("/step"))
+        steps.push(request.postDataJSON().expectedRound);
+      if (path.endsWith("/report")) reports++;
+    });
+    const endpoint =
+      stage === "creation"
+        ? "**/api/simulations"
+        : "**/api/simulations/*/report";
+    await page.route(endpoint, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      heldRequestId = route.request().postDataJSON().requestId;
+      const response = await route.fetch();
+      const result = (await response.json()).data;
+      simulationId = result.id;
+      heldResultSaved = response.ok();
+      await responseGate;
+      await route.abort().catch(() => {});
+    });
+    try {
+      await page
+        .getByLabel("Describe a scenario")
+        .fill(
+          "How could shared transport change daily routines in a small neighborhood?",
+        );
+      await page
+        .getByRole("button", { name: "Start simulation", exact: true })
+        .click();
+      await expect.poll(() => heldResultSaved).toBe(true);
+      expect(creates).toBe(1);
+      expect(steps).toHaveLength(stage === "creation" ? 0 : 6);
+      expect(reports).toBe(stage === "creation" ? 0 : 1);
+      expect(
+        await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("branchlab-auto-run-v1") ?? "null"),
+        ),
+      ).toMatchObject({
+        pending: {
+          kind: stage === "creation" ? "create" : "report",
+          requestId: heldRequestId,
+        },
+      });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page.reload();
+    } finally {
+      releaseResponse();
+    }
+    await expect(
+      page.getByText("6 of 6 rounds complete", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".conversation-report .research-report"),
+    ).toBeVisible();
+    expect(creates).toBe(1);
+    expect(steps).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(reports).toBe(1);
+    const feed = (
+      await (
+        await page.request.get(`/api/simulations/${simulationId}/trace`)
+      ).json()
+    ).data;
+    expect(feed.operations).toHaveLength(8);
+    expect(
+      feed.operations.every(
+        (operation: { status: string; attempt: number }) =>
+          operation.status === "completed" && operation.attempt === 1,
+      ),
+    ).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => sessionStorage.getItem("branchlab-auto-run-v1")),
+      )
+      .toBeNull();
+    await page.reload();
+    await expect(
+      page.locator(".conversation-report .research-report"),
+    ).toBeVisible();
+    expect(creates).toBe(1);
+    expect(steps).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(reports).toBe(1);
+  });
+}
+
+test("a failed step stops automatic execution and reload never silently retries it", async ({
+  page,
+}) => {
+  const id = await savedUnstartedRun(page, "A failed round stays stopped");
+  let steps = 0;
+  let reports = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      request.url().endsWith(`/simulations/${id}/report`)
+    )
+      reports++;
+  });
+  await page.route(`**/api/simulations/${id}/step`, async (route) => {
+    steps++;
+    await route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: "MODEL_UNAVAILABLE",
+          message: "The selected model is temporarily unavailable.",
+          retryable: true,
+        },
+      },
+    });
+  });
+  await page
+    .getByRole("button", { name: "Run simulation", exact: true })
+    .click();
+  await expect(page.locator(".error-banner")).toContainText(
+    "The selected model is temporarily unavailable.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Run simulation", exact: true }),
+  ).toBeEnabled();
+  expect(steps).toBe(1);
+  expect(reports).toBe(0);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Run simulation", exact: true }),
+  ).toBeEnabled();
+  expect(steps).toBe(1);
+  expect(reports).toBe(0);
+  const saved = (
+    await (await page.request.get(`/api/simulations/${id}`)).json()
+  ).data;
+  expect(saved.rounds).toHaveLength(0);
+  expect(saved.report).toBeNull();
 });
 
 test("one Resume simulation click after a deliberate pause finishes every remaining round", async ({
@@ -149,6 +427,10 @@ test("one Resume simulation click after a deliberate pause finishes every remain
     name: "Resume simulation",
     exact: true,
   });
+  await expect(resume).toBeEnabled();
+  expect(steps).toEqual([0]);
+  expect(reports).toBe(0);
+  await page.reload();
   await expect(resume).toBeEnabled();
   expect(steps).toEqual([0]);
   expect(reports).toBe(0);
@@ -629,6 +911,16 @@ test("unnamed scenarios and branches persist without copying their prompts into 
   await expect(
     page.locator(".conversation-report .research-report"),
   ).toBeVisible();
+  const historyEntry = page
+    .getByRole("navigation", { name: "Saved chats" })
+    .getByRole("button", { name: question, exact: true });
+  await expect(historyEntry).toBeVisible();
+  await page.reload();
+  await expect(historyEntry).toBeVisible();
+  await page.screenshot({
+    path: "test-results/sidebar-prompt-title.png",
+    animations: "disabled",
+  });
   await page
     .getByRole("button", { name: "Branch scenario", exact: true })
     .click();

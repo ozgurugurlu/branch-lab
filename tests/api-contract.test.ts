@@ -126,7 +126,7 @@ async function create(cookie: string): Promise<Simulation> {
 }
 
 describe("actual Next.js route contracts", () => {
-  it.each([undefined, "", "   ", "X"])(
+  it.each([undefined, "", "   ", "X", "Untitled simulation"])(
     "accepts an optional simulation and branch title (%j)",
     async (title) => {
       const cookie = await browser();
@@ -136,7 +136,17 @@ describe("actual Next.js route contracts", () => {
       expect(response.status).toBe(200);
       const run: Simulation = (await response.json()).data;
       expect(run.title).toBe(title?.trim() || "Untitled simulation");
+      expect(run.titleSource).toBe(title?.trim() ? "user" : "default");
       expect(run.title).not.toBe(run.question);
+      const listed = await runsGET(req("/api/simulations", cookie));
+      expect((await listed.json()).data).toContainEqual(
+        expect.objectContaining({
+          id: run.id,
+          title: run.title,
+          titleSource: run.titleSource,
+          question: run.question,
+        }),
+      );
       const branch = await branchPOST(
         req(`/api/simulations/${run.id}/branch`, cookie, {
           intervention: "Offer a community grant to support the pilot.",
@@ -145,9 +155,10 @@ describe("actual Next.js route contracts", () => {
         context(run.id),
       );
       expect(branch.status).toBe(200);
-      expect((await branch.json()).data.title).toBe(
-        title?.trim() || `${run.title} · branch`,
-      );
+      expect((await branch.json()).data).toMatchObject({
+        title: title?.trim() || `${run.title} · branch`,
+        titleSource: title?.trim() ? "user" : "default",
+      });
     },
   );
 

@@ -171,6 +171,12 @@ export async function listOperations(
 export function operationRecord(row: Record<string, unknown>): OperationRecord {
   return {
     id: String(row.id),
+    simulationId:
+      row.simulation_id != null
+        ? String(row.simulation_id)
+        : row.result_id != null
+          ? String(row.result_id)
+          : null,
     kind: row.kind as OperationRecord["kind"],
     status:
       row.status === "running" && Number(row.expires_at) < Date.now()

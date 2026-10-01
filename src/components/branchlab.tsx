@@ -3,6 +3,13 @@
 import { ChatWorkspace, type PendingCreation } from "./chat-workspace";
 import { ExecutionHistory } from "./execution-history";
 import { ReportContent } from "./simulation-report";
+import {
+  newAutoRunIntent,
+  readAutoRunIntent,
+  reconcileAutoRun,
+  saveAutoRunIntent,
+  type AutoRunIntent,
+} from "./auto-run";
 import { InlineRequestError } from "./request-error";
 import { useOverlayFocus } from "./use-overlay-focus";
 import {
@@ -47,6 +54,7 @@ import type {
   SimulationSummary,
 } from "@/lib/types";
 import { TEMPLATES, type ScenarioTemplate } from "@/lib/templates";
+import { chatTitle } from "@/lib/chat-title";
 import { ActorNetwork, initials, Trajectory } from "./network";
 import {
   BranchDialog,
@@ -59,6 +67,12 @@ import {
 type View = "network" | "timeline" | "sources" | "report";
 type Modal =
   "new" | "settings" | "branch" | "delete" | "about" | "workspace" | null;
+
+function unconfirmedTransport(error: RequestError) {
+  // Navigation may reject fetch before pagehide. Keep its request metadata
+  // until the owner-scoped journal confirms success or failure on recovery.
+  return ["NETWORK_UNAVAILABLE", "INVALID_RESPONSE"].includes(error.code);
+}
 
 function Mark({ small = false }: { small?: boolean }) {
   return (
@@ -120,6 +134,15 @@ export function Branchlab() {
   const [pauseRequested, setPauseRequested] = useState(false);
   const runLoop = useRef(false);
   const operationBusy = useRef(false);
+  const autoIntent = useRef<AutoRunIntent | null>(null);
+  const recoveryController = useRef<AbortController | null>(null);
+  const recoverStartedRun = useRef<
+    ((intent: AutoRunIntent, epoch: number) => Promise<void>) | null
+  >(null);
+  const rememberAutoRun = useCallback((intent: AutoRunIntent | null) => {
+    autoIntent.current = intent;
+    saveAutoRunIntent(intent);
+  }, []);
   const closeModal = useCallback(() => setModal(null), []);
 
   const sidebarRef = useRef<HTMLElement>(null);
@@ -148,6 +171,7 @@ export function Branchlab() {
         {
           id: sim.id,
           title: sim.title,
+          titleSource: sim.titleSource,
           question: sim.question,
           status: sim.status,
           roundCount: sim.rounds.length,
@@ -166,6 +190,16 @@ export function Branchlab() {
   const initialize = useCallback(async () => {
     const epoch = ++requestEpoch.current;
     readController.current?.abort();
+    recoveryController.current?.abort();
+    // Fast Refresh preserves refs/state but invalidates the old async scheduler.
+    // Restore only explicit tab intent after reading the authoritative journal.
+    const intent = readAutoRunIntent(autoIntent.current);
+    autoIntent.current = intent;
+    runLoop.current = false;
+    operationBusy.current = false;
+    setBusy(null);
+    setRunning(false);
+    setPauseRequested(false);
     const controller = new AbortController();
     readController.current = controller;
     setLoading(true);
@@ -189,9 +223,11 @@ export function Branchlab() {
       } catch {
         /* Optional preference. */
       }
-      const id = list.some((r) => r.id === remembered)
-        ? remembered
-        : list[0]?.id;
+      const id = intent
+        ? intent.simulationId
+        : list.some((r) => r.id === remembered)
+          ? remembered
+          : list[0]?.id;
       if (id) {
         setLoadingStage("Restoring your last simulation…");
         accept(
@@ -201,10 +237,23 @@ export function Branchlab() {
           epoch,
         );
       }
+      if (
+        intent &&
+        autoIntent.current?.id === intent.id &&
+        epoch === requestEpoch.current
+      ) {
+        if (navigator.onLine) {
+          if (intent.simulationId) setLoading(false);
+          else setLoadingStage("Recovering your started simulation…");
+          await recoverStartedRun.current?.(intent, epoch);
+        } else rememberAutoRun(null);
+      }
     } catch (e) {
       if (epoch !== requestEpoch.current || controller.signal.aborted) return;
       const failure = requestError(e);
       setError(failure);
+      if (!unconfirmedTransport(failure) || !navigator.onLine)
+        rememberAutoRun(null);
       if (failure.status === 401 && !isDatabaseSetupError(failure)) {
         setSimulation(null);
         setRuns([]);
@@ -216,19 +265,32 @@ export function Branchlab() {
     } finally {
       if (epoch === requestEpoch.current) setLoading(false);
     }
-  }, [accept]);
+  }, [accept, rememberAutoRun]);
 
   useEffect(() => {
     let mounted = true;
     const epochRef = requestEpoch;
+    const leavePage = () => {
+      // Navigation can reject fetch promises without a React unmount. Fence
+      // those callbacks before they can erase this tab's recovery intent.
+      epochRef.current++;
+      runLoop.current = false;
+      readController.current?.abort();
+      recoveryController.current?.abort();
+    };
+    const restorePage = (event: PageTransitionEvent) => {
+      if (event.persisted) void initialize();
+    };
+    window.addEventListener("pagehide", leavePage);
+    window.addEventListener("pageshow", restorePage);
     void Promise.resolve().then(() => {
       if (mounted) return initialize();
     });
     return () => {
       mounted = false;
-      epochRef.current++;
-      readController.current?.abort();
-      runLoop.current = false;
+      window.removeEventListener("pagehide", leavePage);
+      window.removeEventListener("pageshow", restorePage);
+      leavePage();
     };
   }, [initialize]);
 
@@ -259,6 +321,8 @@ export function Branchlab() {
       setOnline(navigator.onLine);
       if (!navigator.onLine) {
         runLoop.current = false;
+        rememberAutoRun(null);
+        recoveryController.current?.abort();
         setRunning(false);
         setPauseRequested(true);
       }
@@ -270,7 +334,7 @@ export function Branchlab() {
       window.removeEventListener("online", update);
       window.removeEventListener("offline", update);
     };
-  }, []);
+  }, [rememberAutoRun]);
 
   useEffect(() => {
     if (!busy || busy === "load") return;
@@ -339,8 +403,124 @@ export function Branchlab() {
   function stop() {
     if (busy === "step") setPauseRequested(true);
     runLoop.current = false;
+    rememberAutoRun(null);
+    recoveryController.current?.abort();
     setRunning(false);
   }
+
+  function trackAutoRequest(
+    kind: "create" | "step" | "report",
+    expectedRound: number,
+    suppliedRequestId?: string,
+  ) {
+    const intent = autoIntent.current;
+    if (!intent) return () => {};
+    const epoch = requestEpoch.current;
+    rememberAutoRun({
+      ...intent,
+      updatedAt: Date.now(),
+      pending: { kind, expectedRound, requestId: suppliedRequestId ?? null },
+    });
+    if (suppliedRequestId) return () => {};
+    const unsubscribe = subscribeRequestIdentity(() => {
+      if (
+        epoch !== requestEpoch.current ||
+        autoIntent.current?.id !== intent.id
+      )
+        return;
+      rememberAutoRun({
+        ...autoIntent.current,
+        updatedAt: Date.now(),
+        pending: { kind, expectedRound, requestId: getRequestIdentity() },
+      });
+      unsubscribe();
+    });
+    return unsubscribe;
+  }
+
+  function checkpointAutoRun(sim: Simulation) {
+    const intent = autoIntent.current;
+    if (intent)
+      rememberAutoRun({
+        ...intent,
+        simulationId: sim.id,
+        pending: null,
+        updatedAt: Date.now(),
+      });
+  }
+
+  async function recoverAutoRun(intent: AutoRunIntent, epoch: number) {
+    if (epoch !== requestEpoch.current || !navigator.onLine) return;
+    rememberAutoRun(intent);
+    operationBusy.current = true;
+    runLoop.current = true;
+    setRunning(true);
+    setError(null);
+    setPauseRequested(false);
+    setBusy(intent.pending?.kind === "report" ? "report" : "step");
+    const controller = new AbortController();
+    recoveryController.current = controller;
+    try {
+      const current = await reconcileAutoRun(intent, {
+        signal: controller.signal,
+        onIntent: (next) => {
+          if (epoch === requestEpoch.current && runLoop.current)
+            rememberAutoRun(next);
+        },
+        onProgress: (saved, kind) => {
+          if (epoch !== requestEpoch.current || !runLoop.current) return;
+          if (saved) {
+            accept(saved, epoch);
+            setLoading(false);
+          }
+          setBusy(kind === "report" ? "report" : "step");
+        },
+      });
+      if (
+        epoch !== requestEpoch.current ||
+        !runLoop.current ||
+        controller.signal.aborted
+      )
+        return;
+      accept(current, epoch);
+      setLoading(false);
+      if (current.rounds.length >= current.maxRounds && current.report) {
+        rememberAutoRun(null);
+        return;
+      }
+      operationBusy.current = false;
+      setBusy(null);
+      await step(current, true, autoIntent.current ?? intent, true);
+    } catch (reason) {
+      if (epoch !== requestEpoch.current || controller.signal.aborted) return;
+      const failure = requestError(reason);
+      if (intent.pending?.kind === "report" && intent.simulationId)
+        setReportFailure({ id: intent.simulationId, error: failure });
+      else setError(failure);
+      if (!unconfirmedTransport(failure) || !navigator.onLine)
+        rememberAutoRun(null);
+      if (failure.status === 401 && !isDatabaseSetupError(failure)) {
+        setError(failure);
+        setRuns([]);
+        setSimulation(null);
+        activeId.current = null;
+        setConfig((value) =>
+          value ? { ...value, authenticated: false } : value,
+        );
+      }
+    } finally {
+      if (epoch === requestEpoch.current) {
+        operationBusy.current = false;
+        runLoop.current = false;
+        setRunning(false);
+        setBusy(null);
+      }
+    }
+  }
+
+  useEffect(() => {
+    recoverStartedRun.current = recoverAutoRun;
+  });
   async function selectRun(id: string) {
     const epoch = requestEpoch.current;
     if (operationBusy.current) return;
@@ -363,15 +543,27 @@ export function Branchlab() {
       }
     }
   }
-  async function step(start: Simulation, auto = false) {
+  async function step(
+    start: Simulation,
+    auto = false,
+    intent?: AutoRunIntent,
+    reconciled = false,
+  ) {
     const epoch = requestEpoch.current;
     if (
       operationBusy.current ||
       !online ||
       !navigator.onLine ||
-      start.rounds.length >= start.maxRounds
+      (start.rounds.length >= start.maxRounds &&
+        (!auto || Boolean(start.report)))
     )
       return;
+    if (auto && !reconciled) {
+      await recoverAutoRun(intent ?? newAutoRunIntent(start.id), epoch);
+      return;
+    }
+    if (auto) rememberAutoRun(intent ?? newAutoRunIntent(start.id));
+    else rememberAutoRun(null);
     operationBusy.current = true;
     runLoop.current = auto;
     setRunning(auto);
@@ -380,12 +572,59 @@ export function Branchlab() {
     setReportFailure(null);
     setBusy("step");
     let current = start;
+    let admissionRetries = 0;
+    let admissionController: AbortController | null = null;
+    let preserveIntent = false;
     try {
-      do {
-        const next = await api<Simulation>(
-          `/api/simulations/${current.id}/step`,
-          post({ expectedRound: current.rounds.length }),
-        );
+      while (current.rounds.length < current.maxRounds) {
+        const untrack = trackAutoRequest("step", current.rounds.length);
+        let next: Simulation;
+        try {
+          next = await api<Simulation>(
+            `/api/simulations/${current.id}/step`,
+            post({ expectedRound: current.rounds.length }),
+          );
+        } catch (reason) {
+          if (
+            !auto ||
+            requestError(reason).code !== "RUN_BUSY" ||
+            !autoIntent.current ||
+            epoch !== requestEpoch.current ||
+            !runLoop.current ||
+            admissionRetries >= 3
+          )
+            throw reason;
+          admissionRetries++;
+          // RUN_BUSY rejects admission before inference. Wait for the owner's
+          // existing work and re-read its checkpoint instead of racing its lease.
+          const controller = new AbortController();
+          admissionController = controller;
+          recoveryController.current = controller;
+          next = await reconcileAutoRun(autoIntent.current, {
+            signal: controller.signal,
+            onIntent: (value) => {
+              if (epoch === requestEpoch.current && runLoop.current)
+                rememberAutoRun(value);
+            },
+            onProgress: (saved) => {
+              if (saved && epoch === requestEpoch.current && runLoop.current)
+                accept(saved, epoch);
+            },
+          });
+          if (
+            epoch !== requestEpoch.current ||
+            !runLoop.current ||
+            controller.signal.aborted
+          )
+            return;
+          if (next.rounds.length === current.rounds.length) {
+            current = next;
+            checkpointAutoRun(current);
+            continue;
+          }
+        } finally {
+          untrack();
+        }
         if (epoch !== requestEpoch.current) return;
         if (activeId.current === next.id) accept(next, epoch);
         if (next.rounds.length <= current.rounds.length)
@@ -393,11 +632,15 @@ export function Branchlab() {
             "Another operation may still be completing. Refresh the simulation before resuming.",
           );
         current = next;
-      } while (
-        runLoop.current &&
-        current.rounds.length < current.maxRounds &&
-        activeId.current === current.id
-      );
+        admissionRetries = 0;
+        checkpointAutoRun(current);
+        if (
+          !runLoop.current ||
+          activeId.current !== current.id ||
+          !navigator.onLine
+        )
+          break;
+      }
       // A report is its own awaited, checkpointed operation. Pausing an
       // auto-run or losing connectivity stops before starting more model work.
       if (
@@ -408,13 +651,26 @@ export function Branchlab() {
         navigator.onLine
       ) {
         setRunning(false);
-        await writeReport(current, epoch);
+        preserveIntent = await writeReport(current, epoch);
       }
     } catch (e) {
       if (epoch !== requestEpoch.current) return;
-      setError(requestError(e));
+      const failure = requestError(e);
+      preserveIntent = Boolean(
+        auto &&
+        autoIntent.current &&
+        navigator.onLine &&
+        unconfirmedTransport(failure),
+      );
+      if (!(
+        admissionController?.signal.aborted &&
+        e === admissionController.signal.reason
+      ))
+        setError(failure);
+      if (!preserveIntent) rememberAutoRun(null);
     } finally {
       if (epoch === requestEpoch.current) {
+        if (!preserveIntent) rememberAutoRun(null);
         runLoop.current = false;
         setRunning(false);
         setBusy(null);
@@ -441,6 +697,10 @@ export function Branchlab() {
       error: null,
     };
     readController.current?.abort();
+    recoveryController.current?.abort();
+    const creationIntent = runImmediately ? newAutoRunIntent(null) : null;
+    rememberAutoRun(creationIntent);
+    const untrackCreation = trackAutoRequest("create", 0, input.requestId);
     operationBusy.current = true;
     runLoop.current = false;
     activeId.current = null;
@@ -471,14 +731,18 @@ export function Branchlab() {
           post(draft.input),
         );
         if (epoch !== requestEpoch.current) return;
+        checkpointAutoRun(sim);
         accept(sim, epoch);
         setView("network");
         operationBusy.current = false;
         setBusy(null);
-        if (runImmediately) await step(sim, true);
+        if (creationIntent && autoIntent.current?.id === creationIntent.id)
+          await step(sim, true, autoIntent.current);
       } catch (reason) {
         if (epoch !== requestEpoch.current) return;
         const failure = requestError(reason);
+        if (!unconfirmedTransport(failure) || !navigator.onLine)
+          rememberAutoRun(null);
         if (failure.status === 401 && !isDatabaseSetupError(failure)) {
           setConfig((current) =>
             current ? { ...current, authenticated: false } : current,
@@ -489,6 +753,7 @@ export function Branchlab() {
           current?.id === draft.id ? { ...current, error: failure } : current,
         );
       } finally {
+        untrackCreation();
         unsubscribe();
         if (epoch === requestEpoch.current) {
           operationBusy.current = false;
@@ -550,9 +815,14 @@ export function Branchlab() {
       }
     }
   }
-  async function writeReport(current: Simulation, epoch: number) {
+  /** True keeps an unresolved automatic request available for read-only recovery. */
+  async function writeReport(
+    current: Simulation,
+    epoch: number,
+  ): Promise<boolean> {
     setBusy("report");
     setReportFailure(null);
+    const untrack = trackAutoRequest("report", current.rounds.length);
     try {
       const saved = await api<Simulation>(
         `/api/simulations/${current.id}/report`,
@@ -563,13 +833,23 @@ export function Branchlab() {
             : {}),
         }),
       );
-      if (epoch === requestEpoch.current && activeId.current === current.id)
+      if (epoch === requestEpoch.current && activeId.current === current.id) {
+        checkpointAutoRun(saved);
         accept(saved, epoch);
+      }
+      return false;
     } catch (e) {
-      if (epoch !== requestEpoch.current) return;
+      if (epoch !== requestEpoch.current) return false;
       const failure = requestError(e);
+      const unconfirmed = Boolean(
+        autoIntent.current && navigator.onLine && unconfirmedTransport(failure),
+      );
+      if (!unconfirmed) rememberAutoRun(null);
       setReportFailure({ id: current.id, error: failure });
       if (failure.status === 401) setError(failure);
+      return unconfirmed;
+    } finally {
+      untrack();
     }
   }
   async function report() {
@@ -578,7 +858,8 @@ export function Branchlab() {
     operationBusy.current = true;
     setError(null);
     try {
-      await writeReport(simulation, epoch);
+      const unconfirmed = await writeReport(simulation, epoch);
+      if (epoch === requestEpoch.current && !unconfirmed) rememberAutoRun(null);
     } finally {
       if (epoch === requestEpoch.current) {
         operationBusy.current = false;
@@ -624,6 +905,7 @@ export function Branchlab() {
       await api(`/api/simulations/${simulation.id}`, { method: "DELETE" });
       if (epoch !== requestEpoch.current) return;
       setModal(null);
+      rememberAutoRun(null);
       setSimulation(null);
       activeId.current = null;
       setActorId(null);
@@ -644,6 +926,9 @@ export function Branchlab() {
     }
   }
   async function eraseWorkspace() {
+    rememberAutoRun(null);
+    runLoop.current = false;
+    recoveryController.current?.abort();
     await api("/api/workspace", {
       method: "DELETE",
       body: JSON.stringify({ confirmation: "DELETE MY WORKSPACE" }),
@@ -759,9 +1044,10 @@ export function Branchlab() {
                 disabled={Boolean(busy) || loading || !online}
                 onClick={() => void selectRun(run.id)}
                 aria-current={simulation?.id === run.id ? "page" : undefined}
+                title={chatTitle(run)}
               >
                 <span className="run-copy">
-                  <strong>{run.title}</strong>
+                  <strong>{chatTitle(run)}</strong>
                 </span>
                 {run.parentId && <GitBranch size={12} />}
               </button>
@@ -795,7 +1081,9 @@ export function Branchlab() {
             <PanelLeftOpen size={18} />
           </button>
           <span className="chat-current-title">
-            {simulation?.title ?? creation?.input.title ?? ""}
+            {simulation
+              ? chatTitle(simulation)
+              : creation?.input.title?.trim() || creation?.input.question || ""}
           </span>
           <div className="topbar-right">
             {simulation && (

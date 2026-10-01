@@ -88,6 +88,7 @@ export interface ChatMessage {
 export interface Simulation {
   id: string;
   title: string;
+  titleSource?: "user" | "default";
   question: string;
   context: string;
   model: ModelConfig;
@@ -128,6 +129,8 @@ export interface CreateSimulationInput {
 }
 export interface OperationRecord {
   id: string;
+  /** Associated run; a creation has no run ID until its result is committed. */
+  simulationId?: string | null;
   kind: "create" | "step" | "branch" | "chat" | "report";
   status: "running" | "completed" | "failed" | "interrupted";
   startedAt: string;
@@ -183,6 +186,7 @@ export interface PrivacyInfo {
 export interface SimulationSummary {
   id: string;
   title: string;
+  titleSource?: "user" | "default";
   question: string;
   status: Simulation["status"];
   roundCount: number;

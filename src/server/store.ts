@@ -42,6 +42,7 @@ export async function listSimulations(
     return {
       id: s.id,
       title: s.title,
+      titleSource: s.titleSource,
       question: s.question,
       status: s.status,
       roundCount: s.rounds.length,

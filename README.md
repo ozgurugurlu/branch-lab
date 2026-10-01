@@ -18,7 +18,7 @@ Built with **Next.js, React, TypeScript and Mastra**. Use OpenAI or Gemini, conn
 
 Use that question to explore a world of households, workers, businesses and policymakers. Define what the robots can do, who pays for them, and what rules apply. Add supporting material when you want the actors to consider specific evidence.
 
-1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Starting from the composer or detailed setup shows progress in chat, runs every configured round automatically, then writes the report. You can pause after the current round; **Resume simulation** continues through all remaining rounds. **Run one round** is an explicit manual control.
+1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Starting from the composer or detailed setup shows progress in chat, runs every configured round automatically, then writes the report. Reloading the running tab recovers its saved progress and continues without another click. You can pause after the current round; **Resume simulation** continues through all remaining rounds. **Run one round** is an explicit manual control. Titles are optional: chat history shows your chosen title, or the scenario prompt when you leave it blank.
 2. **Watch it unfold.** Run a round or a bounded sequence. The chat shows actual execution progress: which phase is running, which permitted tools agents use, and when results are saved. When a run you start reaches its round limit, Branchlab prepares the analyst report in chat.
 3. **Ask about the outcome.** Interview a worker about its response or ask the analyst to explain the simulated shift in support. Inspect the actors, events and cited material behind the answer.
 4. **Change one condition.** For example, introduce a rule that robots cannot replace paid care workers. Branch from the latest completed state and advance that alternative.
@@ -89,7 +89,7 @@ Each actor receives its own persona and memories, assigned evidence, and bounded
 
 Mastra provides the agents, tools and per-round workflow. Ordinary TypeScript code validates generated actions, checks references, calculates metrics and commits state. Live agents must use a permitted read tool before synthesis, with at most three model steps and two tool executions. The server controls persistence and network destinations. [Agent capabilities and information boundaries](docs/agent-runtime.md).
 
-Every HTTP operation runs at most one bounded round. Application database checkpoints are durable; the Mastra workflow itself is ephemeral. Closing the browser stops scheduling new rounds. Reopening a run lets you continue from its latest saved checkpoint; retrying an interrupted round can repeat charged model calls. [Architecture and execution guarantees](docs/architecture.md).
+Every HTTP operation runs at most one bounded round. Application database checkpoints are durable; the Mastra workflow itself is ephemeral. The tab remembers an explicitly started run and reconciles its server operation before continuing after a reload. It waits for work already in progress and reuses committed results; failed or interrupted operations stop with an error rather than silently repeating model calls. Closing the browser stops scheduling new rounds; there is no background worker. Paused runs and saved runs without an active start request remain stopped. [Architecture and execution guarantees](docs/architecture.md).
 
 ## Deploy your own instance
 
