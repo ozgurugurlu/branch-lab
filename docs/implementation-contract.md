@@ -1,6 +1,6 @@
 # Implementation contract
 
-Current runtime: application/engine **0.3.0**, prompt protocol **2026-09-30.3**, SQL schema **3**. Shared DTOs live in `src/lib/types.ts`; request validation lives in `src/lib/schemas.ts`. Engine provenance is recorded independently of the application release. Timestamps are ISO UTC strings unless a SQL expiry column explicitly stores epoch milliseconds.
+Current runtime: application/engine **0.3.0**, prompt protocol **2026-10-01.1**, SQL schema **3**. Shared DTOs live in `src/lib/types.ts`; request validation lives in `src/lib/schemas.ts`. Engine provenance is recorded independently of the application release. Timestamps are ISO UTC strings unless a SQL expiry column explicitly stores epoch milliseconds.
 
 ## HTTP envelopes and ownership
 
@@ -22,7 +22,7 @@ The browser supplies no provider keys, model base URLs or database URLs. Protect
 | POST `/api/simulations/:id/step`              | `{ expectedRound, requestId? }` → `Simulation`; one complete round                          |
 | POST `/api/simulations/:id/branch`            | `{ intervention, title?, requestId? }` → independent child `Simulation`                     |
 | POST `/api/simulations/:id/chat`              | `{ message, actorId?, requestId? }` → `Simulation`; omitted actor means analyst             |
-| POST `/api/simulations/:id/report`            | `{ requestId? }` → `Simulation` with report                                                 |
+| POST `/api/simulations/:id/report`            | `{ requestId?, refresh?, expectedRound? }` → `Simulation` with report                       |
 | GET `/api/simulations/:id/operations`         | Most recent 100 `OperationRecord` values                                                    |
 | GET `/api/simulations/:id/trace`              | `ExecutionFeed` for the run                                                                 |
 | GET `/api/operations/:requestId/trace`        | Owner-scoped feed by request UUID, including creation before a run exists                   |
@@ -43,6 +43,8 @@ Create, step, branch, chat and report accept an optional UUID `requestId`. The j
 
 `expectedRound` independently makes an already-completed step retry a no-op and rejects future/out-of-sync rounds. Journal records include status, attempt, safe error code, timestamps and engine/prompt versions, without raw request bodies. A creation can be inspected by request UUID before the world exists. A workspace has a 5,000-operation journal limit. A crash after model execution but before commit may repeat provider charges on retry; neither journal nor lease promises exactly-once inference.
 
+Report requests also accept optional `expectedRound` (integer 0–24). The browser always supplies the current saved round count, binding the request hash and UUID to that snapshot. A failed retry at the same round retains its UUID; advancing rounds creates a different request identity, so a lost response from an earlier completed report cannot suppress the final report. The server checks round equality both before returning a cached report and against the freshly leased state before inference, returning `409 ROUND_MISMATCH` on mismatch. Legacy API clients may omit this field.
+
 ## Engine interfaces
 
 `src/mastra/simulation.ts` exports:
@@ -56,13 +58,17 @@ answerQuestion(simulation: Simulation, message: string, actorId?: string, signal
 
 The engine does not write the database. Mastra agents and an ephemeral per-round `decide → reduce` workflow execute against a frozen snapshot. Only the deterministic reducer changes simulated state. It calculates `support = (mean stance + 1) × 50`, `polarization = min(100, standard deviation × 100)` and activity as the number of non-observe actions. These are simulated indices, not forecast probabilities.
 
-Actors receive their own bounded memory, assigned actor-visible sources, direct contacts and previous two rounds of visible public events. Remembered older event IDs must identify actual own events still cited in retained memory. Report/analyst references must come from the supplied latest four rounds / 48 events. Sources are clipped to 6,000 characters each and 24,000 total per selected collection. Initial model payloads and interview history are bounded; reports/chat disclose context truncation. Schema, reference, range and inline-citation checks run before persistence.
+Actors receive their own bounded memory, assigned actor-visible sources, direct contacts and previous two rounds of visible public events. Remembered older event IDs must identify actual own events still cited in retained memory. Report/analyst references must come from the supplied latest four rounds / 48 events. Sources are clipped to 6,000 characters each and 24,000 total per selected collection. Initial model payloads and interview history are bounded. Report coverage metadata and the chat interface disclose these boundaries; live replies receive instructions to explain material omissions in the current question's language. Schema, reference, range and inline-citation checks run before persistence.
 
 Actor profiles select actual distinct tool sets from the client-safe `CAPABILITY_PROFILES` catalog. `src/mastra/tools.ts` constructs read-only Mastra tools over permitted closures. Architect tools exclude analyst-only sources; analyst tools may read them. Research actors alone may receive opt-in `search_web`; the server owns its provider endpoint and budgets. No tools expose arbitrary URL fetch, shell execution, filesystem access, account actions or world mutation. See [agent-runtime.md](agent-runtime.md) for the tool table.
 
 Every live agent first performs a required scoped read and may perform one more tool call before final synthesis. Limits are **three model steps, two tool executions, tool concurrency one and actor concurrency three**. SDK/workflow retries are disabled. Each agent has a 40-second deadline; the route bounds a complete operation to 180 seconds. Mastra JSON prompt injection supports tool/structured interoperability; strict Zod and domain validation establish the output contract. Tool-incompatible models fail visibly; no cloud/local failure silently becomes demo output.
 
-The demo uses deterministic scenario-dependent archetypes, seeded decisions and the same reducer/reference rules. It executes real deterministic read functions and emits explicitly labeled demo activity with zero model calls. No model inference or external search is simulated in the trace.
+Live worlds contain scenario-specific generated fictional personas. Their role, goal, description, stance/influence, assigned sources and bounded memory are modeling assumptions. The demo uses fixed scenario-category archetypes, seeded decisions and the same reducer/reference rules. It executes real deterministic read functions and emits explicitly labeled demo activity with zero model calls. No model inference or external search is simulated in the trace.
+
+New report generation requires an `answer` string of 1–6,000 characters that directly addresses the scenario question, alongside the existing headline, summary, findings, uncertainties and source references. `Report.answer` is optional in the persisted DTO so older reports remain readable. Optional `Report.contextNotes: string[]` contains server-generated English coverage metadata, attached only after strict model-output and citation validation; it is not a model-output field and is displayed outside narrative/uncertainties. Report requests return an existing report unless `refresh: true` is supplied; an explicit refresh uses the normal journal, lease, consent and model budgets and preserves the saved report if generation fails. Refresh is part of the request input used for idempotency. These JSON-field additions do not change SQL schema version 3.
+
+World, actor-action and report prompts use the original scenario's dominant language. Chat/interview prompts use the latest question's language, including material context/history-limit explanations. Validated live chat text receives only bare appended reference tokens such as `[event-id]`; the engine does not append English `Evidence:` or `Context limits:` labels to generated prose.
 
 ## Runtime events
 
@@ -95,5 +101,7 @@ Branches deep-copy the latest completed state, retain source/privacy settings an
 ## Frontend and verification
 
 The browser manages run creation, graph/timeline/source/report inspection, actor capabilities, analyst/actor chat, execution-feed polling, branching, export and privacy controls. Reconnect loads saved checkpoints and journal states. Auto-run schedules one bounded round request at a time; pause stops scheduling after the current request. There is no automatic unattended worker and no claim that closing the browser leaves an indefinitely running simulation.
+
+When a user-started run reaches `maxRounds`, including a manual final step, the browser awaits `POST /api/simulations/:id/report` after saving the final step, provided the run is still active and online and auto-run was not paused. It then presents the scenario question and direct answer in chat before supporting findings and metrics. `status: "completed"` describes round completion; the separate report may be missing or failed. A report failure leaves that round saved and enables inline retry. Viewing/reloading an existing run never starts inference. An explicit **Update report** sends `refresh: true` to upgrade a legacy report; it does not replay simulation rounds.
 
 Engine/protocol tests verify actual local HTTP adapter → Mastra tool call → result → typed output exchanges, privacy/reference bounds and cancellation. SQL tests verify ownership, idempotency, leases and revocation. PostgreSQL integration requires an explicitly configured disposable test database; a passing local adapter test does not establish a deployed Neon account or real cloud-model quality. Use the repository check/build/browser workflows before release. Simulation software tests do not establish scientific forecasting accuracy. Any local reference-source folder is excluded from the application and has no runtime dependency role.

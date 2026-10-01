@@ -2,6 +2,8 @@
 
 import { ChatWorkspace, type PendingCreation } from "./chat-workspace";
 import { ExecutionHistory } from "./execution-history";
+import { ReportContent } from "./simulation-report";
+import { InlineRequestError } from "./request-error";
 import { useOverlayFocus } from "./use-overlay-focus";
 import {
   api,
@@ -17,7 +19,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
-  ArrowUpRight,
   Check,
   ChevronDown,
   Clock3,
@@ -91,6 +92,10 @@ export function Branchlab() {
   );
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<RequestError | null>(null);
+  const [reportFailure, setReportFailure] = useState<{
+    id: string;
+    error: RequestError;
+  } | null>(null);
   const [view, setView] = useState<View>("network");
   const [modal, setModal] = useState<Modal>(null);
   const [template, setTemplate] = useState<ScenarioTemplate | undefined>();
@@ -105,6 +110,7 @@ export function Branchlab() {
   const [parent, setParent] = useState<Simulation | null>(null);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [focusedEvent, setFocusedEvent] = useState<string | null>(null);
+  const [focusedSource, setFocusedSource] = useState<string | null>(null);
   const activeId = useRef<string | null>(null);
   const requestEpoch = useRef(0);
   const readController = useRef<AbortController | null>(null);
@@ -132,6 +138,7 @@ export function Branchlab() {
       activeId.current = sim.id;
       setCreation(null);
       setSimulation(sim);
+      setReportFailure(null);
       try {
         localStorage.setItem("branchlab-last-run", sim.id);
       } catch {
@@ -284,7 +291,28 @@ export function Branchlab() {
         : "smooth",
     });
     element?.focus({ preventScroll: true });
-  }, [view, focusedEvent]);
+  }, [view, focusedEvent, modal]);
+
+  useEffect(() => {
+    if (view !== "sources" || !focusedSource || modal !== "workspace") return;
+    const element = document.getElementById(`document-${focusedSource}`);
+    if (element instanceof HTMLDetailsElement) {
+      element.open = true;
+      element.scrollIntoView({ block: "center", behavior: "auto" });
+      element.querySelector("summary")?.focus({ preventScroll: true });
+    }
+  }, [view, focusedSource, modal]);
+
+  function openReportEvent(id: string) {
+    setFocusedEvent(id);
+    setView("timeline");
+    setModal("workspace");
+  }
+  function openReportSource(id: string) {
+    setFocusedSource(id);
+    setView("sources");
+    setModal("workspace");
+  }
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -348,6 +376,7 @@ export function Branchlab() {
     setRunning(auto);
     setPauseRequested(false);
     setError(null);
+    setReportFailure(null);
     setBusy("step");
     let current = start;
     try {
@@ -368,6 +397,18 @@ export function Branchlab() {
         current.rounds.length < current.maxRounds &&
         activeId.current === current.id
       );
+      // A report is its own awaited, checkpointed operation. Pausing an
+      // auto-run or losing connectivity stops before starting more model work.
+      if (
+        current.rounds.length >= current.maxRounds &&
+        !current.report &&
+        activeId.current === current.id &&
+        (!auto || runLoop.current) &&
+        navigator.onLine
+      ) {
+        setRunning(false);
+        await writeReport(current, epoch);
+      }
     } catch (e) {
       if (epoch !== requestEpoch.current) return;
       setError(requestError(e));
@@ -508,23 +549,35 @@ export function Branchlab() {
       }
     }
   }
+  async function writeReport(current: Simulation, epoch: number) {
+    setBusy("report");
+    setReportFailure(null);
+    try {
+      const saved = await api<Simulation>(
+        `/api/simulations/${current.id}/report`,
+        post({
+          expectedRound: current.rounds.length,
+          ...(current.report && !current.report.answer
+            ? { refresh: true }
+            : {}),
+        }),
+      );
+      if (epoch === requestEpoch.current && activeId.current === current.id)
+        accept(saved, epoch);
+    } catch (e) {
+      if (epoch !== requestEpoch.current) return;
+      const failure = requestError(e);
+      setReportFailure({ id: current.id, error: failure });
+      if (failure.status === 401) setError(failure);
+    }
+  }
   async function report() {
     const epoch = requestEpoch.current;
     if (!simulation || operationBusy.current || !online) return;
     operationBusy.current = true;
-    setBusy("report");
     setError(null);
     try {
-      accept(
-        await api<Simulation>(
-          `/api/simulations/${simulation.id}/report`,
-          post({}),
-        ),
-        epoch,
-      );
-    } catch (e) {
-      if (epoch !== requestEpoch.current) return;
-      setError(requestError(e));
+      await writeReport(simulation, epoch);
     } finally {
       if (epoch === requestEpoch.current) {
         operationBusy.current = false;
@@ -846,6 +899,14 @@ export function Branchlab() {
             onPause={stop}
             onBranch={() => setModal("branch")}
             onDelete={() => setModal("delete")}
+            onGenerateReport={() => void report()}
+            reportError={
+              reportFailure?.id === simulation?.id
+                ? (reportFailure?.error ?? null)
+                : null
+            }
+            onViewEvent={openReportEvent}
+            onViewSource={openReportSource}
           />
         )}
       </main>
@@ -1031,10 +1092,14 @@ export function Branchlab() {
                   simulation={simulation}
                   onGenerate={() => void report()}
                   busy={busy}
-                  onEvent={(id) => {
-                    setFocusedEvent(id);
-                    setView("timeline");
-                  }}
+                  online={online}
+                  error={
+                    reportFailure?.id === simulation.id
+                      ? reportFailure.error
+                      : null
+                  }
+                  onEvent={openReportEvent}
+                  onSource={openReportSource}
                 />
               )}
               <div className="simulation-controls">
@@ -1375,7 +1440,11 @@ function Sources({ simulation }: { simulation: Simulation }) {
       <div className="source-documents">
         {simulation.sources.length ? (
           simulation.sources.map((source) => (
-            <details className="source-document" key={source.id}>
+            <details
+              className="source-document"
+              id={`document-${source.id}`}
+              key={source.id}
+            >
               <summary>
                 <FileText size={19} />
                 <span>
@@ -1475,11 +1544,17 @@ function ReportView({
   onGenerate,
   busy,
   onEvent,
+  onSource,
+  online,
+  error,
 }: {
   simulation: Simulation;
   onGenerate: () => void;
   busy: string | null;
   onEvent: (id: string) => void;
+  onSource: (id: string) => void;
+  online: boolean;
+  error: RequestError | null;
 }) {
   const report = simulation.report;
   return (
@@ -1497,6 +1572,10 @@ function ReportView({
           </span>
         )}
       </div>
+      <InlineRequestError error={error} />
+      {report && busy === "report" && (
+        <p role="status">Updating the simulation report…</p>
+      )}
       {!report ? (
         <div className="report-empty">
           <div className="report-illustration">
@@ -1512,7 +1591,7 @@ function ReportView({
           </p>
           <button
             className="button primary"
-            disabled={Boolean(busy) || !simulation.rounds.length}
+            disabled={Boolean(busy) || !online || !simulation.rounds.length}
             onClick={onGenerate}
           >
             {busy === "report" ? (
@@ -1527,63 +1606,14 @@ function ReportView({
           )}
         </div>
       ) : (
-        <article className="research-report">
-          <div className="report-masthead">
-            <Mark small />
-            <span>BRANCHLAB / RESEARCH NOTE</span>
-            <span>
-              {simulation.model.provider === "demo" ? "DEMO" : "SIMULATION"}
-            </span>
-          </div>
-          <h3>{report.headline}</h3>
-          <p className="report-summary">{report.summary}</p>
-          <div className="report-findings">
-            {report.findings.map((f, i) => (
-              <section key={i}>
-                <span className="finding-number">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <h4>{f.title}</h4>
-                  <p>{f.detail}</p>
-                  <div className="evidence-links">
-                    {f.eventIds.map((id) => (
-                      <button key={id} onClick={() => onEvent(id)}>
-                        <ArrowUpRight size={11} />
-                        {id}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </section>
-            ))}
-          </div>
-          <section className="report-uncertainties">
-            <h4>What remains uncertain</h4>
-            <ul>
-              {report.uncertainties.map((u, i) => (
-                <li key={i}>{u}</li>
-              ))}
-            </ul>
-          </section>
-          <div className="report-source-list">
-            <span className="eyebrow">SOURCE REFERENCES</span>
-            {report.sourceIds.length ? (
-              report.sourceIds.map((id) => (
-                <p key={id}>
-                  <FileText size={13} />
-                  {simulation.sources.find((s) => s.id === id)?.name ?? id}
-                </p>
-              ))
-            ) : (
-              <p>No document sources cited.</p>
-            )}
-          </div>
-          <p className="report-disclaimer">
-            This note describes a simulated scenario. It does not establish
-            real-world probabilities or causal effects.
-          </p>
-        </article>
+        <ReportContent
+          simulation={simulation}
+          variant="drawer"
+          onEvent={onEvent}
+          onSource={onSource}
+          onUpdate={onGenerate}
+          updateDisabled={Boolean(busy) || !online}
+        />
       )}
     </div>
   );

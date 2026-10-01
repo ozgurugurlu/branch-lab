@@ -352,6 +352,7 @@ describe("simulation engine invariants", () => {
       simulation.rounds.at(-1)!.metrics.support.toFixed(1),
     );
     const invalid = structuredClone(report);
+    delete invalid.contextNotes;
     invalid.findings[0].eventIds = ["invented-event"];
     expect(() => validateReport(invalid, simulation)).toThrow(/event IDs/);
     invalid.findings[0].eventIds = [];
@@ -636,14 +637,18 @@ describe("actor information boundaries and reference validation", () => {
     for (let index = 0; index < 6; index++)
       commit(simulation, await executeRound(simulation));
     const report = await generateReport(simulation);
-    expect(report.uncertainties.join(" ")).toContain("source document(s)");
-    expect(report.uncertainties.join(" ")).toContain("recent public events");
+    expect(report.contextNotes?.join(" ")).toContain("source document(s)");
+    expect(report.contextNotes?.join(" ")).toContain("recent public events");
+    expect(report.uncertainties.join(" ")).not.toContain(
+      "Detailed evidence is limited",
+    );
     expect(analystEvents(simulation)).toHaveLength(24);
     const firstEvent = simulation.rounds[0].events[0].id;
     expect(
       analystEvents(simulation).some((event) => event.id === firstEvent),
     ).toBe(false);
     report.findings[0].eventIds = [firstEvent];
+    delete report.contextNotes;
     expect(() => validateReport(report, simulation)).toThrow(/inaccessible/);
     expect(simulation.sources[0].content.length).toBeGreaterThan(6000);
   });
@@ -663,6 +668,8 @@ describe("actor information boundaries and reference validation", () => {
     expect(
       report.findings.every((finding) => finding.eventIds.length <= 16),
     ).toBe(true);
-    expect(validateReport(report, simulation)).toEqual(report);
+    const raw = structuredClone(report);
+    delete raw.contextNotes;
+    expect(validateReport(raw, simulation)).toEqual(raw);
   });
 });

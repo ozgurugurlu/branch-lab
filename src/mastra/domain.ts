@@ -10,7 +10,7 @@ import type {
 } from "@/lib/types";
 
 export const ENGINE_VERSION = "0.3.0";
-export const PROMPT_VERSION = "2026-09-30.3";
+export const PROMPT_VERSION = "2026-10-01.1";
 export const MEMORY_LIMIT = 8;
 export const SOURCE_CONTEXT_BUDGET = 24_000;
 export const SOURCE_DOCUMENT_LIMIT = 6000;
@@ -70,6 +70,7 @@ export const actionSchema = z
 export const reportSchema = z
   .object({
     headline: z.string().trim().min(1).max(180),
+    answer: z.string().trim().min(1).max(6000),
     summary: z.string().trim().min(1).max(3000),
     findings: z
       .array(
@@ -363,7 +364,7 @@ export function validateReport(raw: unknown, simulation: Simulation): Report {
     );
   }
   assertInlineReferences(
-    [report.headline, report.summary, ...report.uncertainties],
+    [report.headline, report.answer, report.summary, ...report.uncertainties],
     new Set([...events, ...sources]),
     new Set([
       ...report.findings.flatMap((finding) => finding.eventIds),

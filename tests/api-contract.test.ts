@@ -249,6 +249,28 @@ describe("actual Next.js route contracts", () => {
     expect(report.status).toBe(200);
     run = (await report.json()).data;
     expect(run.report?.findings.length).toBeGreaterThan(0);
+    expect(run.report?.answer).toBeTruthy();
+    const refreshed = await reportPOST(
+      req(`/api/simulations/${id}/report`, cookie, {
+        refresh: true,
+        expectedRound: 1,
+      }),
+      routeContext,
+    );
+    expect(refreshed.status).toBe(200);
+    const updated: Simulation = (await refreshed.json()).data;
+    expect(updated.version).toBe(run.version + 1);
+    expect(updated.rounds).toEqual(run.rounds);
+    run = updated;
+    const staleReport = await reportPOST(
+      req(`/api/simulations/${id}/report`, cookie, {
+        refresh: true,
+        expectedRound: 0,
+      }),
+      routeContext,
+    );
+    expect(staleReport.status).toBe(409);
+    expect((await staleReport.json()).error.code).toBe("ROUND_MISMATCH");
 
     const jsonExport = await exportGET(
       req(`/api/simulations/${id}/export?format=json`, cookie),
@@ -284,6 +306,8 @@ describe("actual Next.js route contracts", () => {
     expect(markdown).toContain(sourceContent);
     expect(markdown).toContain(run.rounds[0].events[0].id);
     expect(markdown).toContain("## Conversations");
+    expect(markdown).toContain("### Scenario answer");
+    expect(markdown).toContain(run.report!.answer);
 
     const deleted = await runDELETE(
       req(`/api/simulations/${id}`, cookie, undefined, "DELETE"),

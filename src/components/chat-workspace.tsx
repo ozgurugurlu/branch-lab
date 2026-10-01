@@ -43,6 +43,7 @@ import { TEMPLATES, type ScenarioTemplate } from "@/lib/templates";
 import { initials, stanceLabel } from "./network";
 import { InlineRequestError } from "./request-error";
 import { ProcessTrace } from "./process-trace";
+import { InlineSimulationReport } from "./simulation-report";
 import type { RequestError } from "./client-api";
 
 type View = "network" | "timeline" | "sources" | "report";
@@ -71,6 +72,10 @@ interface Props {
   onTemplate: (template: ScenarioTemplate) => void;
   onDemo: () => void;
   onOpenWorkspace: (view?: View) => void;
+  onGenerateReport: () => void;
+  onViewEvent: (id: string) => void;
+  onViewSource: (id: string) => void;
+  reportError: RequestError | null;
   onRun: (auto: boolean) => Promise<void>;
   onPause: () => void;
   onBranch: () => void;
@@ -106,7 +111,7 @@ export function ChatWorkspace(props: Props) {
   }, [creationId]);
   const menuRef = useRef<HTMLDivElement>(null);
   const providers = config?.providers ?? PROVIDERS;
-  const selectedModel = simulation?.model ?? model;
+  const selectedModel = simulation?.model ?? creation?.input.model ?? model;
   const actor = simulation?.world.actors.find((item) => item.id === actorId);
   const messages =
     simulation?.messages.filter((item) => item.actorId === (actorId ?? null)) ??
@@ -152,7 +157,7 @@ export function ChatWorkspace(props: Props) {
     };
   }
   async function submit(question = text) {
-    if (disabled || !question.trim()) return;
+    if (disabled || creation || !question.trim()) return;
     setError(null);
     try {
       if (!simulation) {
@@ -189,22 +194,27 @@ export function ChatWorkspace(props: Props) {
       <textarea
         ref={input}
         aria-label={
-          simulation
+          simulation || creation
             ? actor
               ? `Message ${actor.name}`
               : "Message analyst"
             : "Describe a scenario"
         }
         value={text}
+        disabled={Boolean(creation)}
         onChange={(event) => setText(event.target.value)}
-        rows={simulation ? 2 : 3}
+        rows={simulation || creation ? 2 : 3}
         maxLength={2000}
         placeholder={
-          simulation
-            ? actor
-              ? `Ask ${actor.name.split(" ")[0]} about this world…`
-              : "Ask a question about this simulation…"
-            : "What would you like to explore?"
+          creation
+            ? creation.error
+              ? "Resolve scenario creation before sending a message…"
+              : "Preparing your simulation…"
+            : simulation
+              ? actor
+                ? `Ask ${actor.name.split(" ")[0]} about this world…`
+                : "Ask a question about this simulation…"
+              : "What would you like to explore?"
         }
         onKeyDown={(event) => {
           if (
@@ -226,7 +236,7 @@ export function ChatWorkspace(props: Props) {
               ? "Open source documents"
               : "Add sources and configure scenario"
           }
-          disabled={disabled}
+          disabled={disabled || Boolean(creation)}
           onClick={() =>
             simulation
               ? props.onOpenWorkspace("sources")
@@ -261,7 +271,7 @@ export function ChatWorkspace(props: Props) {
           <button
             type="button"
             className="composer-context"
-            disabled={disabled}
+            disabled={disabled || Boolean(creation)}
             onClick={() => props.onConfigure(draft())}
           >
             <Paperclip size={14} />
@@ -269,7 +279,7 @@ export function ChatWorkspace(props: Props) {
           </button>
         )}
         <div className="composer-right">
-          {simulation ? (
+          {simulation || creation ? (
             <span className="composer-model-static">
               {providers
                 .find((provider) => provider.id === selectedModel.provider)
@@ -300,8 +310,10 @@ export function ChatWorkspace(props: Props) {
             <button
               className="composer-submit"
               type="submit"
-              aria-label={simulation ? "Send message" : "Start simulation"}
-              disabled={disabled || !text.trim()}
+              aria-label={
+                simulation || creation ? "Send message" : "Start simulation"
+              }
+              disabled={disabled || Boolean(creation) || !text.trim()}
             >
               {busy ? (
                 <LoaderCircle size={17} className="spin" />
@@ -605,6 +617,15 @@ export function ChatWorkspace(props: Props) {
                     )}
                   </div>
                 </article>
+                <InlineSimulationReport
+                  simulation={simulation}
+                  busy={busy}
+                  error={props.reportError}
+                  online={props.online}
+                  onGenerate={props.onGenerateReport}
+                  onEvent={props.onViewEvent}
+                  onSource={props.onViewSource}
+                />
                 {busy === "step" && (
                   <p className="conversation-operation-note" role="status">
                     {props.pauseRequested
@@ -715,18 +736,33 @@ export function ChatWorkspace(props: Props) {
           </div>
         )}
       </div>
-      {simulation && (
+      {(simulation || creation) && (
         <div className="conversation-bottom">
           <InlineRequestError error={error} />
           {composer}
           <div className="conversation-bottom-note">
             <span>
-              {simulation.model.provider === "demo"
+              {selectedModel.provider === "demo"
                 ? "Deterministic demo · no language model"
                 : "Generated perspectives · verify against sources"}
             </span>
-            <span>{simulation.usage.modelCalls} model operations</span>
+            <span>
+              {simulation
+                ? `${simulation.usage.modelCalls} model operations`
+                : creation?.error
+                  ? "Scenario draft preserved"
+                  : "Preparing scenario"}
+            </span>
           </div>
+          {simulation && !actor && (
+            <details className="conversation-context-note">
+              <summary>Analyst context</summary>
+              <p>
+                Analyst context uses the latest 4 rounds, up to 48 events and
+                bounded source excerpts.
+              </p>
+            </details>
+          )}
         </div>
       )}
     </div>

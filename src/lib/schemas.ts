@@ -76,7 +76,11 @@ export const loginSchema = z
   .strict();
 
 export const reportInputSchema = z
-  .object({ requestId: requestIdSchema })
+  .object({
+    requestId: requestIdSchema,
+    refresh: z.boolean().optional(),
+    expectedRound: z.number().int().min(0).max(24).optional(),
+  })
   .strict();
 export const deleteWorkspaceSchema = z
   .object({ confirmation: z.literal("DELETE MY WORKSPACE") })

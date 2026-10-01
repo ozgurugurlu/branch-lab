@@ -5902,3 +5902,392 @@ textarea {
   color: #717c66;
   padding: 0 10px 7px;
 }
+
+/* Reports are part of the conversation, with the same saved evidence in the drawer. */
+.inline-simulation-report {
+  margin: 30px 0 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.report-content {
+  padding: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.report-content-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 18px;
+  color: #617251;
+  font-size: 12px;
+}
+.report-content-heading > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.report-content-heading > span:last-child {
+  font-size: 10px;
+  color: #7c8970;
+}
+.report-content > h3 {
+  font-family: var(--font-sans);
+  font-size: 23px;
+  line-height: 1.4;
+  letter-spacing: -0.55px;
+  font-weight: 550;
+  margin: 0;
+  color: #37432e;
+}
+.report-content .report-summary {
+  font-size: 13px;
+  line-height: 1.9;
+  color: #536248;
+  margin-top: 15px;
+  white-space: pre-wrap;
+}
+.report-scenario-answer {
+  margin-top: 25px;
+}
+.report-scenario-answer > h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: #697b59;
+}
+.report-question {
+  margin-top: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.7;
+  color: #607150;
+  white-space: pre-wrap;
+}
+.report-answer {
+  font-size: 14px;
+  line-height: 1.95;
+  color: #3e4e33;
+  white-space: pre-wrap;
+  margin: 16px 0 0;
+}
+.report-run-summary {
+  margin-top: 19px;
+  color: #637651;
+}
+.report-run-summary > summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.report-content .report-run-summary .report-summary {
+  margin-top: 9px;
+  font-size: 12px;
+}
+.report-upgrade {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 14px 0 0;
+}
+.report-upgrade > p {
+  font-size: 12px;
+  color: #6b7c5d;
+  line-height: 1.8;
+  flex: 1;
+}
+.report-upgrade > .button {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.report-content .report-findings {
+  margin-top: 23px;
+}
+.report-content .report-findings > section {
+  gap: 15px;
+  padding: 19px 0;
+  border-color: #e4eadc;
+}
+.report-content .finding-number {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.8;
+  color: #849775;
+  min-width: 20px;
+}
+.report-content .report-findings > section > div {
+  min-width: 0;
+  flex: 1;
+}
+.report-content .report-findings h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: #425438;
+  line-height: 1.6;
+}
+.report-content .report-findings p {
+  font-size: 13px;
+  color: #5c6c51;
+  line-height: 1.85;
+  margin-top: 7px;
+  white-space: pre-wrap;
+}
+.report-content .evidence-links {
+  gap: 7px;
+  margin-top: 12px;
+}
+.report-content .evidence-links button {
+  border: 0;
+  border-radius: 5px;
+  background: #f1f6e9;
+  font-size: 10px;
+  padding: 5px 7px;
+  gap: 4px;
+  line-height: 1.5;
+  color: #647e50;
+  text-align: left;
+}
+.report-content .evidence-links button:hover {
+  background: #e7f0da;
+  color: #435b30;
+}
+.report-content .report-uncertainties {
+  margin-top: 12px;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 19px 0 0;
+}
+.report-content .report-uncertainties h4,
+.report-content .report-source-list h4,
+.report-evidence-coverage h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #516545;
+}
+.report-content .report-uncertainties ul {
+  margin-top: 10px;
+  padding-left: 18px;
+}
+.report-content .report-uncertainties li,
+.report-content .report-uncertainties > p {
+  font-size: 12px;
+  line-height: 1.9;
+  color: #687b5a;
+  margin: 7px 0;
+}
+.report-content .report-source-list {
+  margin-top: 25px;
+}
+.report-evidence-coverage {
+  margin-top: 22px;
+}
+.report-evidence-coverage ul {
+  padding-left: 17px;
+  margin-top: 9px;
+}
+.report-evidence-coverage li {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #6f8061;
+  margin-top: 5px;
+}
+.report-content .report-source-list > ul {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+}
+.report-content .report-source-list li {
+  margin: 6px 0;
+}
+.report-content .report-source-list button {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+  padding: 5px 0;
+  color: #698259;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.report-content .report-source-list button > svg {
+  margin-top: 3px;
+}
+.report-content .report-source-list button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.report-content .report-source-list button small {
+  display: block;
+  font-size: 10px;
+  color: #899a7b;
+  margin-top: 2px;
+}
+.report-content .report-source-list button:hover {
+  color: #415d2f;
+}
+.report-content .report-source-list > p {
+  display: block;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #7b8c6d;
+}
+.report-content .report-source-list > .report-provenance-note {
+  font-size: 10px;
+  color: #7c8c6e;
+  margin-top: 12px;
+}
+.report-content .report-disclaimer {
+  font-size: 11px;
+  line-height: 1.85;
+  color: #6f8061;
+  margin-top: 24px;
+  padding-top: 16px;
+}
+.inline-report-progress {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  color: #7c9766;
+  padding: 3px 0;
+}
+.inline-report-progress > svg {
+  margin-top: 2px;
+}
+.report-content + .inline-report-progress,
+.report-content + .inline-report-recovery {
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.inline-report-progress h3,
+.inline-report-recovery > h3,
+.inline-report-missing h3 {
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.6;
+  color: #5a7447;
+}
+.inline-report-progress p,
+.inline-report-missing p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #7a8e69;
+  margin-top: 5px;
+}
+.inline-report-recovery > .inline-error {
+  margin: 13px 0;
+}
+.inline-report-recovery > .button,
+.inline-report-missing > .button {
+  font-size: 11px;
+  margin-top: 13px;
+}
+.inline-report-missing {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.inline-report-missing > .button {
+  margin: 0;
+  flex-shrink: 0;
+}
+.report-content-drawer {
+  max-width: 830px;
+  margin: 0 auto;
+}
+.conversation-context-note {
+  color: #748269;
+  font-size: 10px;
+  line-height: 1.6;
+  margin: 5px 7px 0;
+}
+.conversation-context-note > summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.conversation-context-note > p {
+  font-size: 11px;
+  margin-top: 6px;
+  max-width: 560px;
+}
+@media (max-width: 640px) {
+  .inline-simulation-report {
+    margin: 25px 0 23px;
+    padding-top: 21px;
+  }
+  .report-content-heading {
+    font-size: 11px;
+    gap: 10px;
+    margin-bottom: 15px;
+  }
+  .report-content-heading > span:last-child {
+    font-size: 9px;
+  }
+  .report-content > h3 {
+    font-size: 20px;
+    letter-spacing: -0.35px;
+  }
+  .report-content .report-summary,
+  .report-content .report-findings p {
+    font-size: 12px;
+  }
+  .report-answer {
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .report-question {
+    font-size: 12px;
+  }
+  .report-upgrade {
+    display: block;
+  }
+  .report-upgrade > .button {
+    margin-top: 10px;
+  }
+  .report-content .report-findings h4 {
+    font-size: 12px;
+  }
+  .report-content .report-findings > section {
+    gap: 10px;
+    padding: 16px 0;
+  }
+  .report-content .finding-number {
+    min-width: 17px;
+    font-size: 10px;
+  }
+  .report-content .evidence-links button {
+    font-size: 9px;
+    padding: 5px 6px;
+  }
+  .report-content .report-uncertainties li,
+  .report-content .report-source-list button {
+    font-size: 11px;
+  }
+  .report-content .report-disclaimer {
+    font-size: 10px;
+  }
+  .inline-report-missing {
+    display: block;
+  }
+  .inline-report-missing > .button {
+    margin-top: 13px;
+  }
+  .inline-report-progress h3,
+  .inline-report-recovery > h3,
+  .inline-report-missing h3 {
+    font-size: 12px;
+  }
+  .inline-report-progress p,
+  .inline-report-missing p {
+    font-size: 11px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inline-report-progress .spin {
+    animation: none;
+  }
+}

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { CreateSimulationInput } from "@/lib/types";
-import { closeDatabase } from "@/server/db";
+import { closeDatabase, database } from "@/server/db";
 import {
   createSimulation,
   stepSimulation,
@@ -51,6 +51,44 @@ afterEach(async () => {
 });
 
 describe("simulation orchestration with real local SQL", () => {
+  it("upgrades legacy reports explicitly, fences refresh retries and preserves the old report on failure", async () => {
+    const created = await createSimulation(input, owner, signal());
+    await stepSimulation(created.id, owner, 0, signal());
+    const reported = await reportSimulation(created.id, owner, signal());
+    expect(reported.report?.answer).toBeTruthy();
+    const legacy = structuredClone(reported);
+    delete legacy.report!.answer;
+    const db = await database();
+    await db.execute({
+      sql: "UPDATE simulations SET data = $1 WHERE id = $2 AND owner = $3",
+      args: [JSON.stringify(legacy), legacy.id, owner],
+    });
+    expect(await reportSimulation(legacy.id, owner, signal())).toEqual(legacy);
+    await expect(
+      reportSimulation(legacy.id, owner, AbortSignal.abort(), undefined, true),
+    ).rejects.toThrow();
+    expect(await readSimulation(legacy.id, owner)).toEqual(legacy);
+    const requestId = randomUUID();
+    const updated = await reportSimulation(
+      legacy.id,
+      owner,
+      signal(),
+      requestId,
+      true,
+    );
+    expect(updated.report?.answer).toBeTruthy();
+    expect(updated.rounds).toEqual(legacy.rounds);
+    expect(updated.messages).toEqual(legacy.messages);
+    expect(updated.version).toBe(legacy.version + 1);
+    expect(
+      await reportSimulation(legacy.id, owner, signal(), requestId, true),
+    ).toEqual(updated);
+    expect(await readSimulation(legacy.id, owner)).toEqual(updated);
+    await expect(
+      reportSimulation(legacy.id, owner, signal(), requestId),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+  });
+
   it("persists creation, idempotent round retries, isolated branches, interviews, and reports", async () => {
     const created = await createSimulation(input, owner, signal());
     expect(created.rounds).toHaveLength(0);

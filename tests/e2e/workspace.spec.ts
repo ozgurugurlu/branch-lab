@@ -19,11 +19,319 @@ async function demo(page: Page) {
   await expect(
     page.getByRole("button", { name: "Completed", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Send message", exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByLabel("Message analyst")).toBeEnabled();
 }
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await unlock(page);
+});
+
+test("finishing a run writes its answer into chat while the composer stays available", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reports = 0;
+  await page.route("**/api/simulations/*/report", async (route) => {
+    reports++;
+    const response = await route.fetch();
+    await gate;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole("button", { name: /Explore a demo/i }).click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Writing the simulation report…",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("6 of 6 rounds complete", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Message analyst")).toBeVisible();
+    await page
+      .getByLabel("Message analyst")
+      .fill("Which assumption matters most?");
+    await expect(
+      page.getByRole("button", { name: "Send message", exact: true }),
+    ).toBeDisabled();
+    await expect(page.locator(".conversation-report")).toContainText(
+      "completed simulation is saved",
+    );
+  } finally {
+    release();
+  }
+  const report = page.getByRole("region", {
+    name: "Simulation report",
+    exact: true,
+  });
+  await expect(report.locator(".research-report")).toBeVisible();
+  await expect(
+    report.getByRole("heading", { name: "Scenario answer", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Send message", exact: true }),
+  ).toBeEnabled();
+  expect(reports).toBe(1);
+  await report
+    .getByRole("button", { name: /^View event / })
+    .first()
+    .click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.locator(".event:focus")).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await report.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: "test-results/inline-report-desktop.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await report.scrollIntoViewIfNeeded();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/inline-report-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.reload();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(reports).toBe(1);
+});
+
+test("a lost automatic report response retries the saved result without rerunning rounds", async ({
+  page,
+}) => {
+  const bodies: Record<string, unknown>[] = [];
+  let rounds = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/step"))
+      rounds++;
+  });
+  await page.route("**/api/simulations/*/report", async (route) => {
+    bodies.push(route.request().postDataJSON());
+    if (bodies.length === 1) {
+      await route.fetch();
+      await route.abort("connectionreset");
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: /Explore a demo/i }).click();
+  const retry = page.getByRole("button", { name: "Retry report", exact: true });
+  await expect(retry).toBeVisible();
+  await expect(
+    page.getByText("6 of 6 rounds complete", { exact: true }),
+  ).toBeVisible();
+  const list = (await (await page.request.get("/api/simulations")).json()).data;
+  const saved = (
+    await (await page.request.get(`/api/simulations/${list[0].id}`)).json()
+  ).data;
+  expect(saved.report.answer).toBeTruthy();
+  await retry.click();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0].requestId).toBeTruthy();
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(rounds).toBe(6);
+  const after = (
+    await (await page.request.get(`/api/simulations/${list[0].id}`)).json()
+  ).data;
+  expect(after.version).toBe(saved.version);
+  expect(after.rounds).toEqual(saved.rounds);
+});
+
+test("a legacy report upgrades on request and keeps the saved text if the update fails", async ({
+  page,
+}) => {
+  await demo(page);
+  await page.route(/\/api\/simulations\/[^/]+$/, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const payload = await response.json();
+    if (payload.data.report) delete payload.data.report.answer;
+    await route.fulfill({ response, json: payload });
+  });
+  const bodies: Record<string, unknown>[] = [];
+  await page.route("**/api/simulations/*/report", async (route) => {
+    bodies.push(route.request().postDataJSON());
+    if (bodies.length === 1)
+      await route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: "MODEL_UNAVAILABLE",
+            message: "The report could not be updated.",
+            retryable: true,
+          },
+        },
+      });
+    else await route.continue();
+  });
+  await page.reload();
+  const report = page.getByRole("region", {
+    name: "Simulation report",
+    exact: true,
+  });
+  const headline = await report.locator(".research-report > h3").textContent();
+  await expect(
+    report.getByRole("button", { name: "Update report", exact: true }),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(0);
+  await report
+    .getByRole("button", { name: "Update report", exact: true })
+    .click();
+  await expect(
+    report.getByRole("button", { name: "Retry report", exact: true }),
+  ).toBeVisible();
+  await expect(report.locator(".research-report > h3")).toHaveText(headline!);
+  await report
+    .getByRole("button", { name: "Retry report", exact: true })
+    .click();
+  await expect(
+    report.getByRole("heading", { name: "Scenario answer", exact: true }),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toMatchObject({ refresh: true });
+  expect(bodies[1]).toEqual(bodies[0]);
+  await expect(
+    report.getByRole("button", { name: "Update report", exact: true }),
+  ).toHaveCount(0);
+});
+
+test("pausing the final round defers the report and reopening never starts inference", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page
+    .getByLabel("What do you want to explore?")
+    .fill("How would a neighborhood respond to a shared community garden?");
+  await page.getByRole("button", { name: /Simulation parameters/ }).click();
+  await page.getByLabel("Rounds", { exact: true }).fill("1");
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Run simulation", exact: true }),
+  ).toBeEnabled();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let roundSaved = false;
+  let reportRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/report"))
+      reportRequests++;
+  });
+  await page.route("**/api/simulations/*/step", async (route) => {
+    const response = await route.fetch();
+    roundSaved = true;
+    await gate;
+    await route.fulfill({ response });
+  });
+  try {
+    await page
+      .getByRole("button", { name: "Run simulation", exact: true })
+      .click();
+    await expect.poll(() => roundSaved).toBe(true);
+    await page
+      .getByRole("button", {
+        name: "Pause simulation after current round",
+        exact: true,
+      })
+      .click();
+  } finally {
+    release();
+  }
+  await expect(
+    page.getByRole("button", { name: "Generate report", exact: true }),
+  ).toBeVisible();
+  expect(reportRequests).toBe(0);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Generate report", exact: true }),
+  ).toBeVisible();
+  expect(reportRequests).toBe(0);
+  await page
+    .getByRole("button", { name: "Generate report", exact: true })
+    .click();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(reportRequests).toBe(1);
+});
+
+test("advancing after a lost partial report creates a fresh final report identity", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page
+    .getByLabel("What do you want to explore?")
+    .fill("How could a town adapt to a shared library of household tools?");
+  await page.getByRole("button", { name: /Simulation parameters/ }).click();
+  await page.getByLabel("Rounds", { exact: true }).fill("2");
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  const step = page.getByRole("button", { name: "Run one round", exact: true });
+  await expect(step).toBeEnabled();
+  await step.click();
+  await expect(
+    page.getByText("1 of 2 rounds complete", { exact: true }),
+  ).toBeVisible();
+  const bodies: Record<string, unknown>[] = [];
+  await page.route("**/api/simulations/*/report", async (route) => {
+    bodies.push(route.request().postDataJSON());
+    if (bodies.length === 1) {
+      await route.fetch();
+      await route.abort("connectionreset");
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "Report", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Generate report", exact: true })
+    .click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry report", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".conversation-report")).not.toContainText(
+    "simulation is complete",
+  );
+  await step.click();
+  await expect(
+    page.getByText("2 of 2 rounds complete", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".conversation-report .research-report"),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0].expectedRound).toBe(1);
+  expect(bodies[1].expectedRound).toBe(2);
+  expect(bodies[1].requestId).not.toBe(bodies[0].requestId);
 });
 
 test("configured Gemini is the default while model changes and consent stay explicit", async ({
@@ -313,9 +621,6 @@ test("chat, inspect, interview, branch, report, export and unlock persisted simu
     "fictional scenario",
   );
   await drawer.getByRole("button", { name: "Report", exact: true }).click();
-  await drawer
-    .getByRole("button", { name: "Generate report", exact: true })
-    .click();
   await expect(drawer.locator(".research-report")).toBeVisible();
   await expect(
     drawer.getByRole("heading", { name: "What remains uncertain" }),
@@ -694,6 +999,11 @@ test("creation leaves the form immediately and shows recorded progress in the ch
     await expect(activity.locator(".process-event")).not.toHaveCount(0);
     await expect(activity).toContainText("Demo");
     await expect(page.locator(".simulation-artifact")).toHaveCount(0);
+    await expect(page.getByLabel("Message analyst")).toBeVisible();
+    await expect(page.getByLabel("Message analyst")).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Send message", exact: true }),
+    ).toBeDisabled();
     await expect(
       page.getByText("Keep this dialog open", { exact: false }),
     ).toHaveCount(0);

@@ -321,9 +321,23 @@ async function reportSimulationInternal(
   owner: string,
   signal: AbortSignal,
   operation: Operation,
+  refresh: boolean,
+  expectedRound?: number,
 ) {
+  const assertRound = (simulation: Simulation) => {
+    if (
+      expectedRound !== undefined &&
+      simulation.rounds.length !== expectedRound
+    )
+      throw new AppError(
+        "ROUND_MISMATCH",
+        "The simulation has advanced. Refresh saved state before generating its report.",
+        409,
+      );
+  };
   const current = await readSimulation(id, owner);
-  if (current.report) return current;
+  assertRound(current);
+  if (current.report && !refresh) return current;
   if (!current.rounds.length)
     throw new AppError(
       "NO_ROUNDS",
@@ -333,6 +347,7 @@ async function reportSimulationInternal(
     id,
     owner,
     async (simulation) => {
+      assertRound(simulation);
       await ensureModel(simulation, owner, 3);
       const runtime = await operationRuntime(
         operation,
@@ -416,8 +431,19 @@ export function reportSimulation(
   owner: string,
   signal: AbortSignal,
   requestId?: string,
+  refresh = false,
+  expectedRound?: number,
 ) {
-  return withOperation(owner, "report", id, {}, requestId, (op) =>
-    reportSimulationInternal(id, owner, signal, op),
+  return withOperation(
+    owner,
+    "report",
+    id,
+    {
+      ...(refresh ? { refresh: true } : {}),
+      ...(expectedRound !== undefined ? { expectedRound } : {}),
+    },
+    requestId,
+    (op) =>
+      reportSimulationInternal(id, owner, signal, op, refresh, expectedRound),
   );
 }

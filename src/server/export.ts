@@ -36,7 +36,10 @@ export function exportMarkdown(
       i.content,
     );
   if (s.report) {
-    lines.push("", "## Report", "", s.report.headline, "", s.report.summary);
+    lines.push("", "## Report", "", s.report.headline);
+    if (s.report.answer)
+      lines.push("", "### Scenario answer", "", s.report.answer);
+    lines.push("", "### What the run showed", "", s.report.summary);
     for (const f of s.report.findings)
       lines.push(
         "",
@@ -52,6 +55,13 @@ export function exportMarkdown(
       "",
       ...s.report.uncertainties.map((u) => `- ${u}`),
     );
+    if (s.report.contextNotes?.length)
+      lines.push(
+        "",
+        "### Evidence coverage",
+        "",
+        ...s.report.contextNotes.map((note) => `- ${note}`),
+      );
   }
   for (const round of s.rounds) {
     lines.push(

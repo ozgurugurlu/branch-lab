@@ -10,7 +10,7 @@ Built with **Next.js, React, TypeScript and Mastra**. Use OpenAI or Gemini, conn
 
 ![Branchlab simulation chat](public/preview.png)
 
-[See the simulation workspace](public/workspace.png) · [Creation progress in chat](public/progress.png) · [Quick start](#quick-start) · [Models](docs/models.md) · [Deployment](docs/deployment.md) · [Architecture](docs/architecture.md)
+[See the simulation workspace](public/workspace.png) · [Creation progress in chat](public/progress.png) · [Automatic report in chat](public/report.png) · [Quick start](#quick-start) · [Models](docs/models.md) · [Deployment](docs/deployment.md) · [Architecture](docs/architecture.md)
 
 ## From a question to a possible future
 
@@ -19,14 +19,20 @@ Built with **Next.js, React, TypeScript and Mastra**. Use OpenAI or Gemini, conn
 Use that question to explore a world of households, workers, businesses and policymakers. Define what the robots can do, who pays for them, and what rules apply. Add supporting material when you want the actors to consider specific evidence.
 
 1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Submitting detailed setup closes the dialog and shows creation progress in chat, then leaves the world ready for review. Starting a demo or local-model scenario directly from the composer also runs its configured rounds automatically; you can pause between rounds.
-2. **Watch it unfold.** Run a round or a bounded sequence. The chat shows actual execution progress: which phase is running, which permitted tools agents use, and when results are saved.
+2. **Watch it unfold.** Run a round or a bounded sequence. The chat shows actual execution progress: which phase is running, which permitted tools agents use, and when results are saved. When a run you start reaches its round limit, Branchlab prepares the analyst report in chat.
 3. **Ask about the outcome.** Interview a worker about its response or ask the analyst to explain the simulated shift in support. Inspect the actors, events and cited material behind the answer.
 4. **Change one condition.** For example, introduce a rule that robots cannot replace paid care workers. Branch from the latest completed state and advance that alternative.
-5. **Compare the paths.** Inspect how the original and the new branch differ, generate an event-linked report, and export the recorded history.
+5. **Read the answer and compare paths.** The report answers your original question first, then presents event-linked findings, metrics and uncertainties. Compare the original and the new branch and export the recorded history. If reporting fails, completed rounds stay saved and you can retry the report in chat.
 
 The same workflow can explore a product launch, a policy proposal, an organizational change or a fictional society. You choose the question and assumptions; Branchlab makes the simulated interactions inspectable.
 
 **These are conditional simulations, not calibrated forecasts.** Synthetic actors are not a representative sample of people. A plausible story does not establish what will happen in the real world.
+
+## Who are the actors?
+
+In **live mode**, the architect generates a new fictional cast for each scenario from your question, context and actor-visible sources. Each actor has a role, goal, modeled stance/influence, relationships and bounded memory. The cast is saved with the run; reopening it does not generate new people. These are synthetic perspectives, not real users, surveyed respondents or digital copies of named people.
+
+An actor's community, research, operations or policy profile determines its permitted read tools. Each sees assigned evidence, its own memory and bounded observations of connected actors—not another actor's private memory or analyst-only sources. The workspace owner can inspect the stored cast and memories. **Demo mode** instead uses fixed category-specific archetypes and deterministic English templates; its roster does not constrain live generation. The interface is English. Live worlds, actor actions and reports follow the original scenario's language; chat and interviews follow your latest question's language. [Persona and tool boundaries](docs/agent-runtime.md).
 
 ## Quick start
 

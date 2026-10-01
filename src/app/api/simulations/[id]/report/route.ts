@@ -11,10 +11,13 @@ export async function POST(
   return api(
     request,
     async ({ owner }) => {
-      const { requestId } = await body(request, reportInputSchema);
+      const { requestId, refresh, expectedRound } = await body(
+        request,
+        reportInputSchema,
+      );
       const { id } = await context.params;
       return withDeadline(request, (signal) =>
-        reportSimulation(id, owner, signal, requestId),
+        reportSimulation(id, owner, signal, requestId, refresh, expectedRound),
       );
     },
     { mutation: true },

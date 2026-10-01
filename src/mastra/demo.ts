@@ -215,22 +215,14 @@ const profiles: Record<string, Archetype[]> = {
 
 function scenarioKind(text: string): keyof typeof profiles {
   if (
-    /street|city|urban|traffic|transport|parking|neighbou?r|district|şehir|trafik|ulaşım/i.test(
+    /street|city|urban|traffic|transport|parking|neighbou?r|district/i.test(
       text,
     )
   )
     return "urban";
-  if (
-    /price|pricing|subscription|customer|product|premium|launch|fiyat|abonelik|ürün/i.test(
-      text,
-    )
-  )
+  if (/price|pricing|subscription|customer|product|premium|launch/i.test(text))
     return "product";
-  if (
-    /\bai\b|automation|technology|employee|workforce|robot|yapay|otomasyon/i.test(
-      text,
-    )
-  )
+  if (/\bai\b|automation|technology|employee|workforce|robot/i.test(text))
     return "technology";
   return "community";
 }
@@ -346,11 +338,11 @@ export function demoDecision(
   for (const intervention of observation.interventions) {
     const content = intervention.content.toLowerCase();
     const positive =
-      /subsid|discount|free|pilot|consult|transparen|safeguard|funding|grant|lower|reduce|affordab|indirim|destek|şeffaf/.test(
+      /subsid|discount|free|pilot|consult|transparen|safeguard|funding|grant|lower|reduce|affordab/.test(
         content,
       );
     const negative =
-      /increase|cost|fee|ban|delay|breach|crisis|mandatory|layoff|cut|raise|zam|yasak|kriz/.test(
+      /increase|cost|fee|ban|delay|breach|crisis|mandatory|layoff|cut|raise/.test(
         content,
       );
     const semanticShift = (positive ? 0.13 : 0) - (negative ? 0.13 : 0);
@@ -432,6 +424,7 @@ export function demoReport(simulation: Simulation): Report {
   if (!latest)
     return {
       headline: "The world is ready; no rounds have been observed",
+      answer: `The scenario asks: “${simulation.question}”. This deterministic demo has no recorded actions yet, so it cannot draw an outcome from the run. Its fictional participants and assumptions are a starting point for exploring that question.`,
       summary: `The scenario “${simulation.title}” contains ${simulation.world.actors.length} synthetic actors. Run a round to produce behavioral evidence.`,
       findings: [
         {
@@ -457,6 +450,7 @@ export function demoReport(simulation: Simulation): Report {
     actorId;
   return {
     headline: `Round ${latest.number}: ${latest.metrics.support.toFixed(1)} support index, ${latest.metrics.polarization.toFixed(1)} polarization`,
+    answer: `For “${simulation.question}”, this deterministic example illustrates a conditional outcome: support for the proposed change coexists with unresolved objections. ${name(highest.actorId)} focuses on ${simulation.world.actors.find((actor) => actor.id === highest.actorId)?.goal.toLowerCase() ?? "the change’s potential benefits"}, while ${name(lowest.actorId)} prioritizes ${simulation.world.actors.find((actor) => actor.id === lowest.actorId)?.goal.toLowerCase() ?? "remaining risks"}. A useful next branch would test a change that addresses the latter priority while preserving the former.\n\nThese are interpretations of template-generated actor actions, not modeled changes to jobs, income, health or everyday life. Demo mode cannot supply a tailored world-outcome narrative; a live-model run can explore those consequences as conditional hypotheses.`,
     summary: `Across ${simulation.rounds.length} recorded rounds, the synthetic support index ${change >= 0 ? "rose" : "fell"} ${Math.abs(change).toFixed(1)} points from the first round. ${latest.metrics.activity} of ${latest.events.length} actors took an active step in the last round. This describes the generated trajectory for “${simulation.question}”; it is not a probability of a real-world outcome.`,
     findings: [
       {
@@ -500,15 +494,13 @@ export function demoAnswer(
     const ownEvent = observation.publicEvents
       .filter((event) => event.actorId === actor.id)
       .at(-1);
-    const keywords = /change|convince|shift|what if|değiş|ikna/i.test(question);
+    const keywords = /change|convince|shift|what if/i.test(question);
     return `[Deterministic demo · ${actor.name}]\n\n${keywords ? `A change would need to address my priority: ${actor.goal}.` : `As ${actor.role.toLowerCase()}, my priority is to ${actor.goal.charAt(0).toLowerCase()}${actor.goal.slice(1)}.`} My current synthetic stance is ${actor.stance.toFixed(2)} on “${observation.question}”.\n\n${ownEvent ? `My latest recorded action: “${ownEvent.content}” [${ownEvent.id}]` : "I have not acted in a round yet; this is an initial fictional position."}\n\nI can observe ${observation.neighbors.length} connected actors and ${observation.sources.length} assigned source documents. I cannot infer other actors’ private memories or unseen discussions.`;
   }
   const latest = simulation.rounds.at(-1);
   if (!latest)
     return `[Deterministic demo · analyst]\n\nThis world has ${simulation.world.actors.length} fictional actors and ${simulation.world.relationships.length} relationships. No rounds have run yet, so there are no behavioral observations to use when answering “${excerpt(question, 180)}”. Run a round, then inspect the timeline or generate a report.`;
-  const polarized = /oppos|risk|polar|against|disagree|itiraz|risk/i.test(
-    question,
-  );
+  const polarized = /oppos|risk|polar|against|disagree/i.test(question);
   const ranked = [...latest.events].sort((a, b) =>
     polarized ? a.stance - b.stance : b.stance - a.stance,
   );

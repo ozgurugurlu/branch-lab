@@ -15,9 +15,13 @@ Branchlab is designed for a personal or small trusted instance. Its protections 
 
 Actor capability profiles are modeling assumptions. Actual permissions are the data captured in each tool closure and the allowed tool registry, enforced again by evidence validation. A prompt alone is not the security boundary. Supplied documents and tool/search results are untrusted data, even when they contain role labels or instructions.
 
+Actor personas are fictional, generated for a live scenario or selected from the deterministic demo's fixed catalogs. Their goals, modeled influence, stances and memories are synthetic assumptions, not profiles of identifiable real people. Memory is private relative to other actors; the workspace owner and server/database operator can inspect stored persona data.
+
 ## Processing consent
 
 A new OpenAI or Gemini run requires `privacy.allowCloud: true`. Withholding it is rejected before a provider call; existing saved runs retain their prior behavior. Branches inherit permissions. The selected provider is immutable for an existing run. Importing a file sends its text to this application server and stores it in the configured database; no inference runs solely because a file was selected.
+
+Reaching the round limit during a user-started browser run also requests an analyst report under that run's existing model-processing consent. The report may use analyst-only sources, as with a manually requested report; those sources do not become visible to simulated actors. Merely opening a saved run performs no report inference. Choosing **Update report** explicitly regenerates a legacy report with the same permissions and can incur further model charges. Report failure does not remove saved rounds or the previous report.
 
 `privacy.allowWebSearch` defaults to false and is independent of model-processing consent. The operator must also configure `BRAVE_SEARCH_API_KEY`. Only the research profile receives web search. Queries are model-authored and can include information derived from an allowed source, so do not enable search for material you cannot disclose to the search provider. The server contacts one pinned Brave endpoint, refuses redirects, limits each response, and never fetches search-result URLs. Returned snippets are unverified external claims. Result titles and URLs can appear in owner-visible execution history and exports.
 

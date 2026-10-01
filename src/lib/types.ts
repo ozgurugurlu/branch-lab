@@ -68,6 +68,10 @@ export interface Intervention {
 }
 export interface Report {
   headline: string;
+  /** Absent only on reports saved before the scenario-answer format. */
+  answer?: string;
+  /** Server-generated evidence coverage metadata, separate from model prose. */
+  contextNotes?: string[];
   summary: string;
   findings: { title: string; detail: string; eventIds: string[] }[];
   uncertainties: string[];

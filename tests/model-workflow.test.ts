@@ -19,10 +19,18 @@ import {
 } from "@/mastra/simulation";
 import { ENGINE_VERSION, PROMPT_VERSION } from "@/mastra/domain";
 import { capabilityProfileFor } from "@/lib/capabilities";
+import {
+  actorInstructions,
+  ANALYST_CHAT_INSTRUCTIONS,
+  ARCHITECT_INSTRUCTIONS,
+  interviewInstructions,
+  REPORT_INSTRUCTIONS,
+} from "@/mastra/prompts";
 
 /** This is a protocol fixture, not a model mock: the real provider, HTTP client, Agent and workflow execute. */
 interface ChatRequest {
   model: string;
+  max_tokens?: number;
   stream?: boolean;
   messages: {
     role: string;
@@ -86,6 +94,7 @@ const world: World = {
 
 let server: Server;
 let captured: Captured[];
+let replyLanguage: "en" | "es";
 let failureMode:
   | "none"
   | "invalid-json"
@@ -156,24 +165,42 @@ function structuredReply(payload: Record<string, unknown>) {
     }[];
     return {
       answer:
-        "The recorded action asks for evaluation; this is synthetic evidence.",
+        replyLanguage === "es"
+          ? "La acción registrada pide una evaluación; no demuestra un resultado real."
+          : "The recorded action asks for evaluation; this is synthetic evidence.",
       eventIds: events.length ? [events[0].id] : [],
       sourceIds: [],
     };
   }
   const events = payload.recentEvents as { id: string }[];
   return {
-    headline: "Recorded requests for evaluation",
-    summary: "The fictional actors requested evaluation in the observed round.",
+    headline:
+      replyLanguage === "es"
+        ? "El apoyo podría depender de la evaluación"
+        : "Recorded requests for evaluation",
+    answer:
+      replyLanguage === "es"
+        ? "El apoyo al proyecto podría depender de una evaluación que responda a las inquietudes. Las peticiones registradas sugieren una prueba, no un resultado observado de la implementación."
+        : "Support for the pilot could depend on an evaluation that addresses stakeholder concerns. The recorded requests suggest a useful test, not an observed outcome of implementing the pilot.",
+    summary:
+      replyLanguage === "es"
+        ? "Los participantes ficticios pidieron una evaluación."
+        : "The fictional actors requested evaluation in the observed round.",
     findings: [
       {
-        title: "Observed request",
-        detail: "A recorded actor action requested evaluation of the pilot.",
+        title:
+          replyLanguage === "es" ? "Petición observada" : "Observed request",
+        detail:
+          replyLanguage === "es"
+            ? "Una acción registrada pidió evaluar el proyecto."
+            : "A recorded actor action requested evaluation of the pilot.",
         eventIds: [events[0].id],
       },
     ],
     uncertainties: [
-      "This protocol fixture cannot establish real-world behavior.",
+      replyLanguage === "es"
+        ? "Esta prueba no establece el comportamiento real; solo se proporcionaron extractos de las fuentes."
+        : "This protocol fixture cannot establish real-world behavior.",
     ],
     sourceIds: [],
   };
@@ -241,6 +268,7 @@ function sendCompletion(
 
 beforeEach(async () => {
   captured = [];
+  replyLanguage = "en";
   failureMode = "none";
   active = 0;
   peak = 0;
@@ -605,6 +633,14 @@ describe("real provider to Mastra workflow protocol", () => {
     expect(actorRequests).toHaveLength(8);
     for (const entry of actorRequests) {
       const actor = entry.payload.actor as Actor;
+      expect(entry.request.max_tokens).toBe(1800);
+      const system = messageText({
+        ...entry.request,
+        messages: entry.request.messages.filter(
+          (message) => message.role === "system",
+        ),
+      });
+      expect(system).toContain(actorInstructions(capabilityProfileFor(actor)));
       const number = Number(actor.id.split("-")[1]);
       expect(entry.text).toContain(`PRIVATE_MEMORY_${number}`);
       for (const other of [1, 2, 3, 4].filter(
@@ -620,6 +656,7 @@ describe("real provider to Mastra workflow protocol", () => {
     simulation.rounds.push(round);
     simulation.world.actors = round.actors;
     const report = await generateReport(simulation, AbortSignal.timeout(4000));
+    expect(report.answer).toContain("Support for the pilot could depend");
     expect(report.findings[0].eventIds).toEqual([round.events[0].id]);
     const answer = await answerQuestion(
       simulation,
@@ -629,9 +666,111 @@ describe("real provider to Mastra workflow protocol", () => {
     );
     expect(answer).toContain(round.events[0].id);
     expect(answer).not.toContain("Deterministic demo");
+    await answerQuestion(
+      simulation,
+      "Which uncertainty matters?",
+      undefined,
+      AbortSignal.timeout(4000),
+    );
+    // Real HTTP requests must carry the appropriate role protocol, without changing data permissions.
+    for (const [matches, expected, maxTokens] of [
+      [
+        (entry: Captured) => Boolean(entry.payload.actorCount),
+        ARCHITECT_INSTRUCTIONS,
+        6500,
+      ],
+      [
+        (entry: Captured) => Boolean(entry.payload.recentEvents),
+        REPORT_INSTRUCTIONS,
+        6000,
+      ],
+      [
+        (entry: Captured) =>
+          Boolean(
+            (entry.payload.observation as { actor?: Actor } | undefined)?.actor,
+          ),
+        interviewInstructions("community"),
+        1800,
+      ],
+      [
+        (entry: Captured) =>
+          Boolean(
+            entry.payload.observation &&
+            !(entry.payload.observation as { actor?: Actor }).actor,
+          ),
+        ANALYST_CHAT_INSTRUCTIONS,
+        3000,
+      ],
+    ] as const) {
+      const matching = captured.filter(matches);
+      expect(matching.length).toBeGreaterThan(0);
+      for (const entry of matching) {
+        expect(entry.request.max_tokens).toBe(maxTokens);
+        expect(
+          messageText({
+            ...entry.request,
+            messages: entry.request.messages.filter(
+              (message) => message.role === "system",
+            ),
+          }),
+        ).toContain(expected);
+      }
+    }
     expect(
       captured.every((entry) => entry.request.model === "schema-fixture"),
     ).toBe(true);
+  });
+
+  it("keeps non-English model prose intact while exposing coverage as separate metadata", async () => {
+    const simulation = await simulationFixture();
+    const round = await executeRound(simulation, AbortSignal.timeout(4000));
+    simulation.rounds.push(round);
+    simulation.world.actors = round.actors;
+    simulation.question =
+      "¿Cómo podría cambiar la vida cotidiana con este proyecto?";
+    simulation.sources[0].content = "x".repeat(7000);
+    simulation.messages = Array.from({ length: 9 }, (_, index) => ({
+      id: `history-${index}`,
+      role: "user",
+      actorId: null,
+      content: "Una pregunta anterior sobre el proyecto.",
+      round: 1,
+      createdAt: simulation.createdAt,
+    }));
+    replyLanguage = "es";
+
+    const report = await generateReport(simulation, AbortSignal.timeout(4000));
+    expect(report.answer).toBe(
+      "El apoyo al proyecto podría depender de una evaluación que responda a las inquietudes. Las peticiones registradas sugieren una prueba, no un resultado observado de la implementación.",
+    );
+    expect(report.uncertainties).toEqual([
+      "Esta prueba no establece el comportamiento real; solo se proporcionaron extractos de las fuentes.",
+    ]);
+    expect(report.contextNotes?.join(" ")).toContain("source document(s)");
+    expect(captured.at(-1)!.payload.contextLimits).not.toEqual([]);
+
+    for (const actorId of [undefined, "actor-1"]) {
+      const answer = await answerQuestion(
+        simulation,
+        "¿Qué ocurrió?",
+        actorId,
+        AbortSignal.timeout(4000),
+      );
+      expect(answer).toBe(
+        `La acción registrada pide una evaluación; no demuestra un resultado real.\n\n[${round.events[0].id}]`,
+      );
+      expect(answer).not.toMatch(
+        /Evidence:|Context limits:|Model context uses excerpts/,
+      );
+      const observation = captured.at(-1)!.payload.observation as {
+        contextLimits: string[];
+      };
+      expect(observation.contextLimits.length).toBeGreaterThan(0);
+      if (!actorId)
+        expect(
+          (captured.at(-1)!.payload.history as { omitted: number }).omitted,
+        ).toBe(1);
+    }
   });
 
   it.each(["invalid-json", "http-error", "length", "forged-citation"] as const)(
@@ -766,7 +905,9 @@ describe("real provider to Mastra workflow protocol", () => {
     expect(
       history.entries.reduce((total, entry) => total + entry.content.length, 0),
     ).toBeLessThanOrEqual(12_000);
-    expect(answer).toContain("Conversation context is bounded");
+    expect(answer).toBe(
+      "The recorded action asks for evaluation; this is synthetic evidence.",
+    );
     expect(simulation.messages[0].content).toContain("STALE_EVIDENCE_SENTINEL");
   });
 
