@@ -408,3 +408,398 @@ test("configuration bootstrap errors offer setup recovery without claiming saved
   await expect(banner).toHaveCount(0);
   await expect(page.getByLabel("Describe a scenario")).toBeVisible();
 });
+
+test("creation leaves the form immediately and shows recorded progress in the chat", async ({
+  page,
+}) => {
+  let releaseResponse!: () => void;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  let created = false;
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    created = response.ok();
+    await responseGate;
+    await route.fulfill({ response });
+  });
+  const question =
+    "What if everyone had a personal robot to help with everyday work?";
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page.getByLabel("Simulation name").fill("A robot in every home");
+  await page.getByLabel("What do you want to explore?").fill(question);
+  try {
+    await page
+      .getByRole("button", { name: "Create simulation", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(".conversation-user-message")).toHaveText(
+      `You${question}`,
+    );
+    const activity = page
+      .locator(".conversation-content")
+      .getByRole("region", { name: "Execution activity" });
+    await expect(activity).toBeVisible();
+    await expect(activity).toContainText("Working on the simulation");
+    await expect.poll(() => created).toBe(true);
+    await expect(activity.locator(".process-event")).not.toHaveCount(0);
+    await expect(activity).toContainText("Demo");
+    await expect(page.locator(".simulation-artifact")).toHaveCount(0);
+    await expect(
+      page.getByText("Keep this dialog open", { exact: false }),
+    ).toHaveCount(0);
+    await page.screenshot({
+      path: "test-results/creation-progress-desktop.png",
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(async () => {
+        const sidebar = await page.locator(".chat-sidebar").boundingBox();
+        return sidebar!.x + sidebar!.width;
+      })
+      .toBeLessThanOrEqual(0);
+    await expect(activity).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: "test-results/creation-progress-mobile.png",
+      fullPage: true,
+    });
+  } finally {
+    releaseResponse();
+  }
+  await expect(
+    page.getByRole("heading", { name: "A robot in every home", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Run one round", exact: true }),
+  ).toBeEnabled();
+});
+
+test("a lost creation response keeps the full draft and retries without duplicating the simulation", async ({
+  page,
+}) => {
+  const bodies: Record<string, unknown>[] = [];
+  let drop = true;
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    bodies.push(route.request().postDataJSON());
+    if (drop) {
+      drop = false;
+      await route.fetch();
+      await route.abort("connectionreset");
+    } else await route.continue();
+  });
+  const question =
+    "How might households adapt when everyone has a personal robot?";
+  const context =
+    "Assume affordable robots, limited energy and no access to private accounts.";
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page.getByLabel("Simulation name").fill("Robots with boundaries");
+  await page.getByLabel("What do you want to explore?").fill(question);
+  await page.getByLabel("Context & assumptions").fill(context);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "robot-brief.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(
+      "Fictional modeling assumptions: energy capacity stays fixed during the pilot.",
+    ),
+  });
+  await page
+    .getByLabel("Access for robot-brief.md")
+    .selectOption("analyst-only");
+  await page.getByRole("button", { name: /Simulation parameters/ }).click();
+  await page.getByLabel("Actors", { exact: true }).fill("4");
+  await page.getByLabel("Rounds", { exact: true }).fill("2");
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".conversation-user-message")).toContainText(
+    question,
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit scenario", exact: true })
+    .click();
+  await expect(page.getByLabel("Simulation name")).toHaveValue(
+    "Robots with boundaries",
+  );
+  await expect(page.getByLabel("What do you want to explore?")).toHaveValue(
+    question,
+  );
+  await expect(page.getByLabel("Context & assumptions")).toHaveValue(context);
+  await expect(page.getByLabel("Access for robot-brief.md")).toHaveValue(
+    "analyst-only",
+  );
+  await expect(
+    page.getByLabel("Allow cloud model processing for this run"),
+  ).not.toBeChecked();
+  await page.getByRole("button", { name: /Simulation parameters/ }).click();
+  await expect(page.getByLabel("Actors", { exact: true })).toHaveValue("4");
+  await expect(page.getByLabel("Rounds", { exact: true })).toHaveValue("2");
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Retry simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Robots with boundaries", exact: true }),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0].requestId).toBeTruthy();
+  expect(bodies[1]).toEqual(bodies[0]);
+  const response = await page.request.get("/api/simulations");
+  const runs = (await response.json()).data;
+  expect(
+    runs.filter(
+      (run: { title: string }) => run.title === "Robots with boundaries",
+    ),
+  ).toHaveLength(1);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Robots with boundaries", exact: true }),
+  ).toBeVisible();
+});
+
+test("a new scenario replaces the active thread while preserving saved history", async ({
+  page,
+}) => {
+  await demo(page);
+  await page
+    .getByRole("heading", { name: "The four-day experiment", exact: true })
+    .click();
+  await page.keyboard.press("n");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  const question =
+    "What changes when personal robots become common across a city?";
+  await page.getByLabel("Simulation name").fill("A city of robots");
+  await page.getByLabel("What do you want to explore?").fill(question);
+  let releaseFailure!: () => void;
+  const failureGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve;
+  });
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await failureGate;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "DATABASE_UNAVAILABLE",
+          message: "Storage is temporarily unavailable.",
+          retryable: true,
+        },
+      }),
+    });
+  });
+  try {
+    await page
+      .getByRole("button", { name: "Create simulation", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(".conversation-user-message")).toContainText(
+      question,
+    );
+    await expect(page.locator(".simulation-artifact")).toHaveCount(0);
+    await expect(
+      page
+        .getByRole("navigation", { name: "Saved chats" })
+        .getByRole("button", { name: "The four-day experiment", exact: true }),
+    ).toBeVisible();
+  } finally {
+    releaseFailure();
+  }
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.getByLabel("Describe a scenario")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.locator(".conversation-user-message")).toHaveCount(0);
+  await page
+    .getByRole("navigation", { name: "Saved chats" })
+    .getByRole("button", { name: "The four-day experiment", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "The four-day experiment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("6 of 6 rounds complete", { exact: true }),
+  ).toBeVisible();
+});
+
+test("a cloud scenario keeps explicit consent before moving progress into chat", async ({
+  page,
+}) => {
+  let cloudModel = "";
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    const provider = payload.data.providers.find(
+      (item: { id: string }) => item.id === "openai",
+    );
+    provider.configured = true;
+    cloudModel = provider.models[0].id;
+    payload.data.webSearchConfigured = true;
+    await route.fulfill({ response, json: payload });
+  });
+  const submissions: Record<string, unknown>[] = [];
+  // Intercept every create request: this browser test never invokes a cloud model.
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "MODEL_UNAVAILABLE",
+          message: "The selected model is temporarily unavailable.",
+          retryable: true,
+        },
+      }),
+    });
+  });
+  await page.reload();
+  await expect(page.getByLabel("Describe a scenario")).toBeVisible();
+  await page
+    .getByLabel("Model", { exact: true })
+    .selectOption(`openai:${cloudModel}`);
+  const question =
+    "What if personal robots were available to every household worldwide?";
+  await page.getByLabel("Describe a scenario").fill(question);
+  await page
+    .getByRole("button", { name: "Start simulation", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel("What do you want to explore?")).toHaveValue(
+    question,
+  );
+  await expect(
+    page.getByLabel("Allow cloud model processing for this run"),
+  ).not.toBeChecked();
+  await expect(
+    dialog.getByRole("button", { name: "Create simulation", exact: true }),
+  ).toBeDisabled();
+  expect(submissions).toHaveLength(0);
+  await page.getByLabel("Allow cloud model processing for this run").check();
+  await page.getByLabel("Allow research agents to search the web").check();
+  await dialog
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".conversation-user-message")).toContainText(
+    question,
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0].model).toEqual({
+    provider: "openai",
+    model: cloudModel,
+  });
+  expect(submissions[0].privacy).toEqual({
+    allowCloud: true,
+    allowWebSearch: true,
+  });
+  await page
+    .getByRole("button", { name: "Edit scenario", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("combobox", { name: "Model provider", exact: true }),
+  ).toHaveValue("openai");
+  await expect(
+    dialog.getByRole("combobox", { name: "Model", exact: true }),
+  ).toHaveValue(cloudModel);
+  await expect(
+    page.getByLabel("Allow cloud model processing for this run"),
+  ).toBeChecked();
+  await expect(
+    page.getByLabel("Allow research agents to search the web"),
+  ).toBeChecked();
+});
+
+test("creation authentication failures allow unlock without discarding the draft or retry identity", async ({
+  page,
+}) => {
+  const submissions: Record<string, unknown>[] = [];
+  let expired = true;
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions.push(route.request().postDataJSON());
+    if (expired) {
+      expired = false;
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "Unlock this workspace in Settings to continue.",
+            retryable: false,
+          },
+        }),
+      });
+    } else await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page.getByLabel("Simulation name").fill("Resume after unlock");
+  const question =
+    "How would personal robots change a small community's daily routines?";
+  await page.getByLabel("What do you want to explore?").fill(question);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "private-assumptions.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(
+      "Fictional analyst-only context for the retry regression.",
+    ),
+  });
+  await page
+    .getByLabel("Access for private-assumptions.md")
+    .selectOption("analyst-only");
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toBeVisible();
+  await unlock(page);
+  await expect(page.locator(".conversation-user-message")).toContainText(
+    question,
+  );
+  await page
+    .getByRole("button", { name: "Retry simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Resume after unlock", exact: true }),
+  ).toBeVisible();
+  expect(submissions).toHaveLength(2);
+  expect(submissions[0].requestId).toBeTruthy();
+  expect(submissions[1]).toEqual(submissions[0]);
+  expect(submissions[1].sources).toEqual([
+    {
+      name: "private-assumptions.md",
+      content: "Fictional analyst-only context for the retry regression.",
+      access: "analyst-only",
+    },
+  ]);
+});

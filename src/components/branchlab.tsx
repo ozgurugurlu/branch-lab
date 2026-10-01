@@ -1,6 +1,6 @@
 "use client";
 
-import { ChatWorkspace } from "./chat-workspace";
+import { ChatWorkspace, type PendingCreation } from "./chat-workspace";
 import { ExecutionHistory } from "./execution-history";
 import { useOverlayFocus } from "./use-overlay-focus";
 import {
@@ -11,6 +11,8 @@ import {
   recoveryHint,
   isDatabaseSetupError,
   resetMutationRequests,
+  getRequestIdentity,
+  subscribeRequestIdentity,
 } from "./client-api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -82,6 +84,7 @@ export function Branchlab() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [runs, setRuns] = useState<SimulationSummary[]>([]);
   const [simulation, setSimulation] = useState<Simulation | null>(null);
+  const [creation, setCreation] = useState<PendingCreation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<RequestError | null>(null);
@@ -124,6 +127,7 @@ export function Branchlab() {
     (sim: Simulation, epoch = requestEpoch.current) => {
       if (epoch !== requestEpoch.current) return;
       activeId.current = sim.id;
+      setCreation(null);
       setSimulation(sim);
       try {
         localStorage.setItem("branchlab-last-run", sim.id);
@@ -290,6 +294,7 @@ export function Branchlab() {
         return;
       event.preventDefault();
       setTemplate(undefined);
+      setDraftInput(undefined);
       setModal("new");
     };
     window.addEventListener("keydown", handleShortcut);
@@ -368,43 +373,86 @@ export function Branchlab() {
       }
     }
   }
-  async function create(input: CreateSimulationInput, runImmediately = false) {
-    const epoch = requestEpoch.current;
+  function create(
+    input: CreateSimulationInput,
+    runImmediately = false,
+    previous?: PendingCreation,
+  ) {
     if (operationBusy.current || loading || !online)
       throw new RequestError(
         "WORKSPACE_BUSY",
         "Wait for the current request to finish and check your connection.",
       );
+    const epoch = ++requestEpoch.current;
+    const draft: PendingCreation = {
+      id: previous?.id ?? crypto.randomUUID(),
+      input: structuredClone(input),
+      runImmediately,
+      requestId: previous?.requestId ?? input.requestId ?? null,
+      error: null,
+    };
+    readController.current?.abort();
     operationBusy.current = true;
+    runLoop.current = false;
+    activeId.current = null;
+    setSimulation(null);
+    setCreation(draft);
+    setParent(null);
+    setActorId(null);
+    setComparisonOpen(false);
+    setSidebarOpen(false);
+    setRunning(false);
     setBusy("create");
     setError(null);
-    try {
-      const sim = await api<Simulation>("/api/simulations", post(input));
+    setModal(null);
+    // The request helper publishes its durable ID before issuing the POST.
+    // Capture only this creation's identity; never show a previous run's trace.
+    const unsubscribe = subscribeRequestIdentity(() => {
       if (epoch !== requestEpoch.current) return;
-      accept(sim, epoch);
-      setModal(null);
-      setView("network");
-      setActorId(null);
-      setComparisonOpen(false);
-      operationBusy.current = false;
-      setBusy(null);
-      if (runImmediately) await step(sim, true);
-    } catch (e) {
-      if (epoch !== requestEpoch.current) return;
-      if (runImmediately) setError(requestError(e));
-      throw e;
-    } finally {
-      if (epoch === requestEpoch.current) {
+      const requestId = getRequestIdentity();
+      setCreation((current) =>
+        current?.id === draft.id ? { ...current, requestId } : current,
+      );
+      unsubscribe();
+    });
+    void (async () => {
+      try {
+        const sim = await api<Simulation>(
+          "/api/simulations",
+          post(draft.input),
+        );
+        if (epoch !== requestEpoch.current) return;
+        accept(sim, epoch);
+        setView("network");
         operationBusy.current = false;
         setBusy(null);
+        if (runImmediately) await step(sim, true);
+      } catch (reason) {
+        if (epoch !== requestEpoch.current) return;
+        const failure = requestError(reason);
+        if (failure.status === 401 && !isDatabaseSetupError(failure)) {
+          setConfig((current) =>
+            current ? { ...current, authenticated: false } : current,
+          );
+          setRuns([]);
+        }
+        setCreation((current) =>
+          current?.id === draft.id ? { ...current, error: failure } : current,
+        );
+      } finally {
+        unsubscribe();
+        if (epoch === requestEpoch.current) {
+          operationBusy.current = false;
+          setBusy(null);
+        }
       }
-    }
+    })();
   }
-  async function exploreDemo() {
+  function exploreDemo() {
     const model =
       config?.providers.find((p) => p.id === "demo")?.models[0]?.id ??
       "branchlab-demo";
-    await create(
+    create(
       {
         ...TEMPLATES[0].input,
         model: { provider: "demo", model },
@@ -415,6 +463,16 @@ export function Branchlab() {
       },
       true,
     );
+  }
+  function retryCreation() {
+    if (!creation || operationBusy.current || !online) return;
+    create(creation.input, creation.runImmediately, creation);
+  }
+  function editCreation() {
+    if (!creation || operationBusy.current) return;
+    setDraftInput(creation.input);
+    setTemplate(undefined);
+    setModal("new");
   }
   async function branch(intervention: string, title: string) {
     const epoch = requestEpoch.current;
@@ -535,6 +593,7 @@ export function Branchlab() {
     operationBusy.current = false;
     resetMutationRequests();
     setSimulation(null);
+    setCreation(null);
     setRuns([]);
     setParent(null);
     setDraftInput(undefined);
@@ -558,6 +617,8 @@ export function Branchlab() {
     if (operationBusy.current || loading) return;
     stop();
     setSimulation(null);
+    setCreation(null);
+    setDraftInput(undefined);
     activeId.current = null;
     setActorId(null);
     setSidebarOpen(false);
@@ -672,7 +733,9 @@ export function Branchlab() {
           >
             <PanelLeftOpen size={18} />
           </button>
-          <span className="chat-current-title">{simulation?.title ?? ""}</span>
+          <span className="chat-current-title">
+            {simulation?.title ?? creation?.input.title ?? ""}
+          </span>
           <div className="topbar-right">
             {simulation && (
               <button
@@ -745,9 +808,12 @@ export function Branchlab() {
           </div>
         ) : (
           <ChatWorkspace
-            key={simulation?.id ?? "new"}
+            key={simulation?.id ?? creation?.id ?? "new"}
             config={config}
             simulation={simulation}
+            creation={creation}
+            onRetryCreation={retryCreation}
+            onEditCreation={editCreation}
             actorId={actorId}
             onActorChange={setActorId}
             busy={busy}
@@ -1051,7 +1117,10 @@ export function Branchlab() {
           onEraseWorkspace={eraseWorkspace}
           onAuthenticate={async (password) => {
             await api("/api/session", post({ password }));
-            await initialize();
+            if (creation) {
+              setConfig(await api<AppConfig>("/api/config"));
+              await refreshRuns();
+            } else await initialize();
           }}
           onLock={async () => {
             if (operationBusy.current)
@@ -1064,6 +1133,7 @@ export function Branchlab() {
             await api("/api/session", { method: "DELETE" });
             resetMutationRequests();
             setSimulation(null);
+            setCreation(null);
             setRuns([]);
             setParent(null);
             setDraftInput(undefined);

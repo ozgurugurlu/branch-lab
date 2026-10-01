@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "An open-source laboratory for multi-agent scenario simulation.",
+  "description": "Explore what-if scenarios through simulation chat. Run AI actors, inspect their interactions, and compare branching outcomes with Mastra.",
   "license": "MIT",
   "scripts": {
     "dev": "next dev",

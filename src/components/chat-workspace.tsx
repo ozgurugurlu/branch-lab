@@ -17,6 +17,8 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCcw,
+  Settings2,
   ShieldCheck,
   SkipForward,
   Sparkles,
@@ -36,11 +38,22 @@ import { TEMPLATES, type ScenarioTemplate } from "@/lib/templates";
 import { initials, stanceLabel } from "./network";
 import { InlineRequestError } from "./request-error";
 import { ProcessTrace } from "./process-trace";
+import type { RequestError } from "./client-api";
 
 type View = "network" | "timeline" | "sources" | "report";
+export interface PendingCreation {
+  id: string;
+  input: CreateSimulationInput;
+  runImmediately: boolean;
+  requestId: string | null;
+  error: RequestError | null;
+}
 interface Props {
   config: AppConfig | null;
   simulation: Simulation | null;
+  creation: PendingCreation | null;
+  onRetryCreation: () => void;
+  onEditCreation: () => void;
   actorId: string | null;
   busy: string | null;
   running: boolean;
@@ -48,10 +61,10 @@ interface Props {
   online: boolean;
   onActorChange: (id: string | null) => void;
   onSend: (message: string) => Promise<void>;
-  onStart: (input: CreateSimulationInput) => Promise<void>;
+  onStart: (input: CreateSimulationInput) => void;
   onConfigure: (input: CreateSimulationInput) => void;
   onTemplate: (template: ScenarioTemplate) => void;
-  onDemo: () => Promise<void>;
+  onDemo: () => void;
   onOpenWorkspace: (view?: View) => void;
   onRun: (auto: boolean) => Promise<void>;
   onPause: () => void;
@@ -60,7 +73,7 @@ interface Props {
 }
 
 export function ChatWorkspace(props: Props) {
-  const { simulation, config, busy, actorId } = props;
+  const { simulation, creation, config, busy, actorId } = props;
   const [text, setText] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [model, setModel] = useState<ModelConfig>({
@@ -68,9 +81,24 @@ export function ChatWorkspace(props: Props) {
     model: "branchlab-demo",
   });
   const [menu, setMenu] = useState(false);
-  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  const creationFocus = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const creationId = creation?.id;
+  useEffect(() => {
+    if (!creationId) return;
+    const frame = requestAnimationFrame(() =>
+      creationFocus.current?.focus({ preventScroll: true }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [creationId]);
   const menuRef = useRef<HTMLDivElement>(null);
   const providers = config?.providers ?? PROVIDERS;
   const selectedModel = simulation?.model ?? model;
@@ -129,13 +157,13 @@ export function ChatWorkspace(props: Props) {
           props.onConfigure(draft(question));
           return;
         }
-        setPendingQuestion(question.trim());
-        await props.onStart(draft(question));
+        props.onStart(draft(question));
+        return;
       } else await props.onSend(question.trim());
+      if (!mounted.current) return;
       setText((current) => (current.trim() === question.trim() ? "" : current));
     } catch (reason) {
-      setError(reason);
-      setPendingQuestion(null);
+      if (mounted.current) setError(reason);
     }
   }
   const composer = (
@@ -301,10 +329,10 @@ export function ChatWorkspace(props: Props) {
   );
   return (
     <div
-      className={`conversation-layout ${simulation || pendingQuestion ? "has-conversation" : "new-conversation"}`}
+      className={`conversation-layout ${simulation || creation ? "has-conversation" : "new-conversation"}`}
     >
       <div className="conversation-scroll" ref={scroll}>
-        {!simulation && !pendingQuestion ? (
+        {!simulation && !creation ? (
           <div className="chat-home">
             <div className="chat-home-greeting">
               <span className="chat-home-symbol">
@@ -337,10 +365,10 @@ export function ChatWorkspace(props: Props) {
             <button
               className="explore-demo-link"
               disabled={disabled}
-              onClick={async () => {
+              onClick={() => {
                 setError(null);
                 try {
-                  await props.onDemo();
+                  props.onDemo();
                 } catch (reason) {
                   setError(reason);
                 }
@@ -361,9 +389,68 @@ export function ChatWorkspace(props: Props) {
           <div className="conversation-content">
             <div className="conversation-user-message">
               <span>You</span>
-              <p>{simulation?.question ?? pendingQuestion}</p>
+              <p>{simulation?.question ?? creation?.input.question}</p>
             </div>
-            <ProcessTrace simulationId={simulation?.id} busy={busy} />
+            {creation && (
+              <div
+                ref={creationFocus}
+                tabIndex={-1}
+                className="creation-summary"
+                aria-label="Scenario creation"
+              >
+                <span>
+                  {providers.find(
+                    (provider) => provider.id === creation.input.model.provider,
+                  )?.name ?? creation.input.model.provider}{" "}
+                  · {creation.input.actorCount} actors ·{" "}
+                  {creation.input.maxRounds} rounds
+                  {creation.input.sources.length
+                    ? ` · ${creation.input.sources.length} source documents`
+                    : ""}
+                </span>
+              </div>
+            )}
+            <ProcessTrace
+              simulationId={simulation?.id}
+              requestId={creation ? creation.requestId : undefined}
+              busy={busy}
+            />
+            {creation &&
+              (creation.error ? (
+                <section
+                  className="creation-recovery"
+                  aria-label="Scenario needs attention"
+                >
+                  <InlineRequestError error={creation.error} context="draft" />
+                  <p>
+                    Your scenario, source documents and settings are kept in
+                    this tab.
+                  </p>
+                  <div>
+                    <button
+                      className="button primary small"
+                      disabled={disabled}
+                      onClick={props.onRetryCreation}
+                    >
+                      <RotateCcw size={14} />
+                      Retry simulation
+                    </button>
+                    <button
+                      className="button secondary small"
+                      disabled={Boolean(busy)}
+                      onClick={props.onEditCreation}
+                    >
+                      <Settings2 size={14} />
+                      Edit scenario
+                    </button>
+                  </div>
+                </section>
+              ) : (
+                <p className="creation-status" role="status">
+                  Creating your simulation. Activity appears here as it is
+                  recorded.
+                </p>
+              ))}
             {simulation && (
               <>
                 <div className="conversation-assistant-intro">

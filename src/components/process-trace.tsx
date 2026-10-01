@@ -24,15 +24,19 @@ import { InlineRequestError } from "./request-error";
 export function ProcessTrace({
   simulationId,
   busy,
+  requestId: explicitRequestId,
 }: {
   simulationId?: string;
   busy: string | null;
+  requestId?: string | null;
 }) {
-  const requestId = useSyncExternalStore(
+  const latestRequestId = useSyncExternalStore(
     subscribeRequestIdentity,
     getRequestIdentity,
     () => null,
   );
+  const requestId =
+    explicitRequestId === undefined ? latestRequestId : explicitRequestId;
   const endpoint =
     busy && requestId
       ? `/api/operations/${requestId}/trace`
@@ -207,8 +211,7 @@ export function ProcessTrace({
             </>
           )}
           <p className="trace-disclosure">
-            Recorded execution summaries, limited to the latest 100 operations
-            and 600 events. Private model reasoning is not shown.
+            Recent recorded activity from this run.
           </p>
         </div>
       )}

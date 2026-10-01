@@ -1,76 +1,109 @@
 # Branchlab
 
-**A laboratory for exploring how a scenario could unfold.**
+**A world you can ask “what if?”**
 
-Give Branchlab a question and supporting material. Build a cast of synthetic stakeholders, watch them interact, introduce a change, and ask what drove the result. Every completed round is saved so you can inspect the same history and compare a new branch with its starting point.
+Explore what-if scenarios through simulation chat. Run AI actors, inspect their interactions, and compare branching outcomes with Mastra.
 
-A chat-first TypeScript application built with **Next.js, React, Mastra and SQL persistence**. MIT licensed. Runs locally without API keys in an explicitly labeled deterministic demo, or uses OpenAI, Gemini, Ollama and LM Studio.
+Branchlab is an open-source application for turning a question into a small simulated world. Start a conversation, describe the conditions, and build a cast of synthetic actors with different goals, information and relationships. Follow their decisions over successive rounds, ask what drove a response, then change a condition and explore another branch.
 
-![Branchlab simulation workspace](public/preview.png)
+Built with **Next.js, React, TypeScript and Mastra**. Use OpenAI or Gemini, connect Ollama or LM Studio, or explore the deterministic demo without API keys. Persist runs in SQLite, Turso or Neon/PostgreSQL. MIT licensed.
 
-[View the simulation workspace](public/workspace.png)
+![Branchlab simulation chat](public/preview.png)
 
-## Get started
+[See the simulation workspace](public/workspace.png) · [Creation progress in chat](public/progress.png) · [Quick start](#quick-start) · [Models](docs/models.md) · [Deployment](docs/deployment.md) · [Architecture](docs/architecture.md)
 
-Requires Node.js **22.13+** and npm.
+## From a question to a possible future
+
+> What if everyone had a personal robot?
+
+Use that question to explore a world of households, workers, businesses and policymakers. Define what the robots can do, who pays for them, and what rules apply. Add supporting material when you want the actors to consider specific evidence.
+
+1. **Describe the scenario in chat.** Branchlab's architect proposes actors, relationships and assumptions. Submitting detailed setup closes the dialog and shows creation progress in chat, then leaves the world ready for review. Starting a demo or local-model scenario directly from the composer also runs its configured rounds automatically; you can pause between rounds.
+2. **Watch it unfold.** Run a round or a bounded sequence. The chat shows actual execution progress: which phase is running, which permitted tools agents use, and when results are saved.
+3. **Ask about the outcome.** Interview a worker about its response or ask the analyst to explain the simulated shift in support. Inspect the actors, events and cited material behind the answer.
+4. **Change one condition.** For example, introduce a rule that robots cannot replace paid care workers. Branch from the latest completed state and advance that alternative.
+5. **Compare the paths.** Inspect how the original and the new branch differ, generate an event-linked report, and export the recorded history.
+
+The same workflow can explore a product launch, a policy proposal, an organizational change or a fictional society. You choose the question and assumptions; Branchlab makes the simulated interactions inspectable.
+
+**These are conditional simulations, not calibrated forecasts.** Synthetic actors are not a representative sample of people. A plausible story does not establish what will happen in the real world.
+
+## Quick start
+
+Requires **Node.js 22.13 or newer** and npm. From the repository directory:
 
 ```sh
 npm ci
-cp .env.example .env.local
+cp -n .env.example .env.local
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000), choose **Explore a demo**, then follow real execution steps, open the simulation workspace, ask an actor or the analyst a question, and create a branch with a changed condition. The local database is created at `.data/branchlab.db`. Demo responses are rule-based illustrations, not LLM outputs.
+Open [localhost:3000](http://localhost:3000) and choose **Explore a demo**. The demo uses deterministic rules and is visibly labeled; it does not call an LLM. SQLite tables are created automatically at `.data/branchlab.db`, with no separate migration command. `cp -n` preserves an existing `.env.local`.
 
-To use a live model, set `OPENAI_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` in `.env.local`, restart the server, and select the provider when creating a scenario. For local inference, set `ENABLE_LOCAL_MODELS=true` and start Ollama or LM Studio. [Model setup and current presets](docs/models.md).
+For live inference, add **one** provider key to `.env.local`, restart the server, then select that provider when creating a scenario:
 
-## What you can do
+```dotenv
+OPENAI_API_KEY=your-openai-key
+# Or:
+GOOGLE_GENERATIVE_AI_API_KEY=your-google-key
+```
 
-- Start from the chat composer or a detailed scenario with 4–12 synthetic actors, explicit assumptions and source references.
-- Follow live phase/tool activity, durations, errors and saved operation history. Activity summaries are not private model reasoning.
-- Give community, research, operations and policy actors distinct scoped tools and observations.
-- Import text, Markdown or CSV; inspect original material and hashes. Keep selected sources visible only to the analyst, excluded from the architect and actors.
-- Explicitly permit cloud inference and, separately, optional Brave web search. Research agents alone receive the search tool when enabled.
-- Explore actors and their relationships on an interactive network.
-- Advance a single round, run multiple rounds, pause between rounds, and resume saved runs.
-- Inspect individual actions, simulated support and disagreement over time.
-- Interview an actor using its own observations, or discuss the run with an analyst.
-- Fork the latest completed state with an intervention and compare its trajectory.
-- Generate an event-linked report; export the complete run as JSON or a readable Markdown research record.
-- Use a shared instance password, isolated browser workspaces, bounded model/tool loops and persistent operation locks.
-- Recover from lost responses using persistent request IDs; clear all workspace data and revoke in-flight writes from Settings.
-- Run on local SQLite, remote Turso, or Neon/PostgreSQL with the same ownership and transaction contracts.
+For Ollama or LM Studio, enable `ENABLE_LOCAL_MODELS=true` and start your model server. Local models must support both tool calling and structured responses. See [model setup](docs/models.md) for presets, endpoint rules and troubleshooting. Provider errors remain visible; a failed live run never silently becomes a demo.
 
-## How it works
+## Explore, inspect and branch
+
+| Capability                  | What it gives you                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chat and scenario setup     | A conversational starting point, with detailed controls for assumptions, sources and 4–12 actors.                                                           |
+| Distinct actor capabilities | Community, research, operations and policy profiles with scoped tools and observations.                                                                     |
+| Source controls             | Text, Markdown and CSV imports; original material and hashes; analyst-only sources excluded from the architect and actors.                                  |
+| Visible execution           | Real phase and tool activity, durations, safe errors and saved operation history. Activity summaries do not expose private model reasoning.                 |
+| Simulation workspace        | An interactive actor network, event timeline, simulated support/disagreement, actor interviews and analyst chat.                                            |
+| Interventions and records   | Branches from saved checkpoints, trajectory comparison, event-linked reports, JSON and Markdown exports.                                                    |
+| Optional web search         | Brave search for research actors, requiring both server configuration and separate per-run consent. Result URLs are not fetched.                            |
+| Saved progress              | Database checkpoints, bounded runs, pause between rounds and workspace erasure. Failed creation offers Retry or Edit, preserving inputs in the current tab. |
+
+## How the agents work
 
 ```mermaid
 flowchart LR
-  A[Question + source text] --> B[Mastra scenario architect]
-  B --> C[Actors + relationships + assumptions]
-  C --> D[Frozen round snapshot]
-  D --> E[Actor-specific observations]
-  E --> F[Mastra actor decisions]
-  F --> G[Validate + deterministic reducer]
-  G --> H[Atomic database checkpoint]
-  H --> D
-  H --> I[Analyst / actor interview]
-  H --> J[Intervention branch]
-  H --> K[Report + export]
+  A[Question and sources] --> B[Mastra architect]
+  B --> C[Actors, relationships and assumptions]
+  C --> D[Shared prior-round snapshot]
+  D --> E[Scoped actor tools and decisions]
+  E --> F[Validation and computed metrics]
+  F --> G[Saved checkpoint]
+  G --> D
+  G --> H[Interview, branch or report]
 ```
 
-An actor sees its persona, own memories, assigned sources, and the previous public actions of its neighbors. Actors decide against the same snapshot, with at most three actor agents in parallel. Ordinary TypeScript code validates identities and ranges and calculates aggregate metrics. Each live agent must use a permitted read tool before synthesis, with at most three model requests and two tool executions. The server owns all writes and external destinations. [Agent capabilities and runtime](docs/agent-runtime.md).
+Each actor receives its own persona and memories, assigned evidence, and bounded observations of its neighbors' prior actions. Actors decide against the same frozen snapshot, with at most three actor agents running in parallel. The analyst has a broader view of source material and recorded public events.
 
-Each HTTP operation executes at most one bounded round. Completed state is durable in the application's database; Mastra's per-round workflow is ephemeral. Closing the browser stops scheduling new rounds, and reopening the run resumes from the latest saved checkpoint. A crash within an unfinished round may repeat charged calls on retry. [Architecture and guarantees](docs/architecture.md).
+Mastra provides the agents, tools and per-round workflow. Ordinary TypeScript code validates generated actions, checks references, calculates metrics and commits state. Live agents must use a permitted read tool before synthesis, with at most three model steps and two tool executions. The server controls persistence and network destinations. [Agent capabilities and information boundaries](docs/agent-runtime.md).
 
-## Deploy
+Every HTTP operation runs at most one bounded round. Application database checkpoints are durable; the Mastra workflow itself is ephemeral. Closing the browser stops scheduling new rounds. Reopening a run lets you continue from its latest saved checkpoint; retrying an interrupted round can repeat charged model calls. [Architecture and execution guarantees](docs/architecture.md).
 
-**Vercel is the supported serverless target.** Import this repository as a Next.js project, provision Neon/PostgreSQL (`DATABASE_URL`) or Turso (`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`), and set `APP_PASSWORD`. Add the model credentials you want to enable. Use Node 22 or newer and Fluid Compute. No writable serverless filesystem is required for remote storage.
+## Deploy your own instance
 
-A Docker image is also provided for self-hosting with a persistent volume. Cloudflare Workers is not a tested deployment target for this version; the documented path uses Vercel's Node runtime. [Full deployment instructions](docs/deployment.md).
+**Vercel** is the supported serverless target; **Docker** and persistent Node servers are also supported. Hosted deployments need Neon/PostgreSQL or Turso. Local SQLite needs a persistent filesystem. Cloudflare Workers is not a tested target for this version.
 
-PostgreSQL tables use the dedicated `branchlab` schema by default, avoiding collisions with other applications' tables. `DATABASE_SCHEMA` selects another application namespace. Existing installations whose compatible Branchlab tables are in `public` must explicitly set `DATABASE_SCHEMA=public` to keep using them; switching schemas does not move data. Startup rejects incompatible tables before session cleanup or application writes.
+For Vercel, configure the remote database, set `APP_PASSWORD` and your exact `APP_ORIGIN`, add any model credentials, and enable Fluid Compute with the required execution duration. Follow the [deployment guide](docs/deployment.md) for complete Vercel and Docker instructions, database permissions, TLS and runtime limits.
 
-## Development
+For Neon, use the pooled connection URL as `DATABASE_URL`. It takes precedence over Turso settings. PostgreSQL uses a dedicated **`branchlab` schema** by default. An existing, compatible Branchlab installation in `public` must explicitly set `DATABASE_SCHEMA=public` to keep using that data. Changing schemas does not move records; startup rejects incompatible tables without repairing or deleting them. [Database setup and schema selection](docs/deployment.md#neon--postgresql).
+
+## Privacy and practical limits
+
+Branchlab is designed for a **personal or small trusted instance**. An optional local instance password becomes required for hosted live inference; configure `APP_PASSWORD` before exposing a deployment. Browser workspaces are isolated, but this is not an organization account system, team RBAC or account recovery. Cloud credentials stay on the server.
+
+New cloud scenarios require processing consent. Web search is a separate opt-in and requires `BRAVE_SEARCH_API_KEY`; queries can contain scenario-derived information. A local model endpoint may run on another machine, so selecting Ollama or LM Studio does not by itself guarantee on-device processing.
+
+Settings shows storage and retention information and can erase the browser's workspace, including its runs and execution records. Erasure revokes pending writes; it cannot remove upstream provider records or operator backups. Sessions expire 30 days after creation, and expired workspace data is cleaned on subsequent application traffic. [Privacy and retention](docs/privacy.md) · [Security model](SECURITY.md).
+
+Current bounds include **12 actors**, **12 initial rounds**, **24 rounds along a branch lineage**, **40 questions per run**, and six text sources of up to 16,000 characters each / 48,000 combined. There is no PDF extraction, arbitrary crawling or unattended background runner. See [runtime limits](docs/deployment.md#operations-and-limits) and the [API contract](docs/implementation-contract.md).
+
+Support is a normalized mean actor stance; disagreement is the standard deviation of stance. Neither is a real-world probability. Live model output may vary with identical settings, and exports preserve recorded history rather than reproducible generation. Source references provide traceability, not automatic proof that the model interpreted evidence correctly. [Research and methodology](docs/research.md).
+
+## Development and contributing
 
 ```sh
 npm run typecheck
@@ -81,34 +114,16 @@ npm run build
 npm run test:e2e
 ```
 
-Unit/integration tests cover scoped tool execution through the real Mastra/SDK HTTP protocol, observation privacy, cancellation, idempotency, safe errors, SQL fencing and concurrent erasure. A disposable PostgreSQL 17 service runs the same persistence contracts in CI. Browser tests cover the chat workflow, accessibility, mobile layout and failure recovery. Tests do not require paid credentials. Live-provider account access, output quality and remote hosting need validation in your own deployment.
+Offline tests exercise real Mastra/SDK protocols with controlled model responses, plus permissions, validation, cancellation, idempotency, safe errors and persistence. CI includes a disposable PostgreSQL service. Browser tests cover the chat workflow, accessibility, mobile layout and failure recovery. Tests do not need paid credentials and do not establish forecasting accuracy; validate provider access and hosted configuration with your own accounts.
 
 | Location          | Responsibility                                                               |
 | ----------------- | ---------------------------------------------------------------------------- |
-| `src/mastra/`     | Architect, actor decisions, workflow, demo engine, analyst                   |
-| `src/lib/`        | Shared types, input schemas, provider catalog, templates                     |
+| `src/mastra/`     | Architect, actors, tools, workflow, demo engine and analyst                  |
+| `src/lib/`        | Shared types, validation, provider catalog and templates                     |
 | `src/server/`     | Model connections, SQL adapters, sessions, privacy, traces and orchestration |
-| `src/app/api/`    | Scoped, validated HTTP boundary                                              |
-| `src/components/` | Simulation workspace and interactive views                                   |
+| `src/app/api/`    | Scoped HTTP routes                                                           |
+| `src/components/` | Chat and simulation workspace                                                |
 | `tests/`          | Engine, persistence, provider and browser checks                             |
-| `docs/`           | Research, architecture, models, deployment and API contract                  |
+| `docs/`           | Architecture, runtime, models, deployment, privacy and research              |
 
-## Privacy and operation controls
-
-The instance password controls access to a personal or small trusted deployment. Each browser owns its own workspace; this is not organization membership, team RBAC or account recovery. Cloud credentials stay server-side. Source visibility is enforced in the engine, and browser payloads cannot choose network endpoints.
-
-New cloud runs require explicit processing consent. Web search is a separate opt-in and needs `BRAVE_SEARCH_API_KEY`; queries may reflect supplied scenario information. Local model endpoints can be remote servers configured by the operator, so a local provider label is not a guarantee of on-device processing.
-
-Settings exposes retention, storage and data erasure. Erasure removes runs and execution records and revokes pending writes; backups and upstream provider records remain governed by their operators. Expired workspaces are deleted on subsequent application traffic. [Privacy and threat boundaries](docs/privacy.md).
-
-## Interpreting the output
-
-Branchlab explores **conditional simulated behavior**. Its support score is a normalized mean actor stance; disagreement is the standard deviation of stance. Neither is an empirically calibrated probability. Synthetic actors are not a representative sample of people, and a plausible explanation is not evidence of prediction accuracy.
-
-The deterministic demo seed controls its rule-based behavior. Live LLM outputs can vary even with identical settings. JSON exports preserve recorded events for inspection; they do not promise reproducible model generation. Source IDs provide traceability to supplied material, not automatic verification that a model's interpretation is correct.
-
-Current limits: text imports only (six sources, 16,000 characters each, 48,000 combined), 12 actors, 12 initial rounds, 24 rounds along a branch lineage and 40 questions per run. No web crawling, PDF extraction, million-agent execution, calibrated forecasting, background queue or multi-user collaboration is implied. [Research and methodology](docs/research.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and contribution expectations, and [SECURITY.md](SECURITY.md) for the deployment trust model. Third-party packages retain their own licenses; this repository's original code is MIT licensed. Self-hosted DM Sans and Instrument Serif fonts use the SIL Open Font License; their notices are preserved in `public/fonts/`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations. Original project code is [MIT licensed](LICENSE); dependencies retain their own licenses. The self-hosted DM Sans and Instrument Serif fonts use the SIL Open Font License, with notices in `public/fonts/`.

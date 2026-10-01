@@ -138,8 +138,7 @@ export function Dialog({
               This operation is running. Keep this dialog open until it
               finishes.
             </p>
-            {(eyebrow === "NEW SIMULATION" ||
-              eyebrow.startsWith("BRANCH FROM")) && (
+            {eyebrow.startsWith("BRANCH FROM") && (
               <ProcessTrace busy="operation" />
             )}
           </div>
@@ -164,7 +163,7 @@ export function NewSimulationDialog({
   initialTemplate?: ScenarioTemplate;
   initialDraft?: CreateSimulationInput;
   onClose: () => void;
-  onCreate: (input: CreateSimulationInput) => Promise<void>;
+  onCreate: (input: CreateSimulationInput) => void;
   busy: boolean;
 }) {
   const first = initialDraft
@@ -179,8 +178,12 @@ export function NewSimulationDialog({
   const [sources, setSources] = useState<CreateSimulationInput["sources"]>(
     first.input.sources,
   );
-  const [allowCloud, setAllowCloud] = useState(false);
-  const [allowWebSearch, setAllowWebSearch] = useState(false);
+  const [allowCloud, setAllowCloud] = useState(
+    initialDraft?.privacy?.allowCloud ?? false,
+  );
+  const [allowWebSearch, setAllowWebSearch] = useState(
+    initialDraft?.privacy?.allowWebSearch ?? false,
+  );
   const [provider, setProvider] = useState<ProviderId>(
     initialDraft?.model.provider ?? "demo",
   );
@@ -189,9 +192,9 @@ export function NewSimulationDialog({
       providers.find((p) => p.id === "demo")?.models[0]?.id ??
       "branchlab-demo",
   );
-  const [count, setCount] = useState(8);
-  const [rounds, setRounds] = useState(6);
-  const [seed, setSeed] = useState(42);
+  const [count, setCount] = useState(initialDraft?.actorCount ?? 8);
+  const [rounds, setRounds] = useState(initialDraft?.maxRounds ?? 6);
+  const [seed, setSeed] = useState(initialDraft?.seed ?? 42);
   const [error, setError] = useState<unknown>(null);
   const [advanced, setAdvanced] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -255,7 +258,7 @@ export function NewSimulationDialog({
       wide
     >
       <form
-        onSubmit={async (e) => {
+        onSubmit={(e) => {
           e.preventDefault();
           if (importing) return;
           setError("");
@@ -268,7 +271,7 @@ export function NewSimulationDialog({
               throw new Error(
                 "Enter a valid model identifier using letters, numbers, dots, slashes, colons, plus signs or hyphens.",
               );
-            await onCreate({
+            onCreate({
               title: title.trim(),
               question: question.trim(),
               context: context.trim(),

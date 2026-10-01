@@ -7,7 +7,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Branchlab — A laboratory for possible futures",
   description:
-    "An open-source workspace for multi-agent scenario simulation. Explore perspectives, introduce a change, and follow what happens next.",
+    "Explore what-if scenarios through simulation chat. Run AI actors, inspect their interactions, and compare branching outcomes with Mastra.",
 };
 
 export default function RootLayout({
