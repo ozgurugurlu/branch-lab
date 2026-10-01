@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
 import {
   afterAll,
   afterEach,
@@ -10,7 +11,7 @@ import {
 } from "vitest";
 import type { CreateSimulationInput } from "../src/lib/types";
 import { closeDatabase, database, databaseBackend } from "../src/server/db";
-import { postgresConfig } from "../src/server/postgres";
+import { postgresConfig, postgresSchema } from "../src/server/postgres";
 import {
   consumeLimit,
   getSession,
@@ -32,6 +33,7 @@ import {
 } from "../src/server/store";
 import { eraseWorkspace } from "../src/server/privacy";
 import { operationRuntime } from "../src/server/trace";
+import { AppError } from "../src/server/errors";
 
 const testURL = process.env.TEST_DATABASE_URL;
 const signal = () => AbortSignal.timeout(10_000);
@@ -80,6 +82,30 @@ const input: CreateSimulationInput = {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("PostgreSQL connection configuration", () => {
+  it("uses one dedicated schema and permits an explicit legacy or custom schema", () => {
+    expect(postgresSchema("")).toBe("branchlab");
+    expect(postgresSchema("public")).toBe("public");
+    expect(postgresSchema("Team_2")).toBe("Team_2");
+  });
+  it.each([
+    "branchlab,public",
+    "branchlab;DROP SCHEMA public",
+    'bad"name',
+    "$user",
+    "pg_catalog",
+    "pg_temp",
+    "information_schema",
+    "a".repeat(64),
+  ])("rejects unsafe schema selection without echoing it", (value) => {
+    expect(() => postgresSchema(value)).toThrow(
+      expect.objectContaining({ code: "DATABASE_SCHEMA", status: 503 }),
+    );
+    try {
+      postgresSchema(value);
+    } catch (error) {
+      expect(String(error)).not.toContain(value);
+    }
+  });
   it("requires verified TLS for Neon and leaves loopback PostgreSQL usable without TLS", () => {
     const neon = postgresConfig(
       "postgresql://user:test-only@ep-example-pooler.neon.tech/branchlab?sslmode=require&channel_binding=require",
@@ -128,6 +154,7 @@ describe.skipIf(!testURL)(
           "TEST_DATABASE_URL must name a disposable database ending in _test.",
         );
       vi.stubEnv("DATABASE_URL", testURL!);
+      vi.stubEnv("DATABASE_SCHEMA", "branchlab");
       for (const key of [
         "VERCEL",
         "CF_PAGES",
@@ -188,7 +215,7 @@ describe.skipIf(!testURL)(
       await expect(
         db.transaction(async (tx) => {
           await tx.execute(insert);
-          throw new Error("Fixture rollback");
+          throw new AppError("TEST_ROLLBACK", "Fixture rollback", 500);
         }),
       ).rejects.toThrow("Fixture rollback");
       expect((await db.execute("SELECT id FROM sessions")).rows).toHaveLength(
@@ -386,6 +413,189 @@ describe.skipIf(!testURL)(
       } finally {
         await restore();
       }
+    });
+  },
+);
+
+describe.skipIf(!testURL)(
+  "PostgreSQL schema isolation and compatibility",
+  () => {
+    let inspection: Pool;
+    beforeEach(async () => {
+      if (!new URL(testURL!).pathname.endsWith("_test"))
+        throw new Error(
+          "TEST_DATABASE_URL must name a disposable database ending in _test.",
+        );
+      await closeDatabase();
+      vi.stubEnv("DATABASE_URL", testURL!);
+      vi.stubEnv("DATABASE_SCHEMA", undefined);
+      vi.stubEnv("APP_PASSWORD", undefined);
+      vi.stubEnv("APP_ORIGIN", undefined);
+      inspection = new Pool({ ...postgresConfig(testURL!), max: 1 });
+      // This suite only runs against the explicitly supplied disposable test DB.
+      await inspection.query("DROP SCHEMA IF EXISTS branchlab CASCADE");
+      await inspection.query(
+        "DROP SCHEMA IF EXISTS branchlab_custom_test CASCADE",
+      );
+      for (const table of [
+        "trace_events",
+        "operations",
+        "simulations",
+        "sessions",
+        "rate_limits",
+        "revoked_sessions",
+        "schema_migrations",
+      ]) {
+        await inspection.query(`DROP TABLE IF EXISTS public.${table} CASCADE`);
+      }
+    });
+    afterEach(async () => {
+      await closeDatabase();
+      await inspection?.end();
+    });
+
+    async function foreignSessions() {
+      await inspection.query(
+        "CREATE TABLE public.sessions (id uuid PRIMARY KEY, user_id text NOT NULL, status text NOT NULL)",
+      );
+      await inspection.query(
+        "INSERT INTO public.sessions (id, user_id, status) VALUES ('00000000-0000-0000-0000-000000000001', 'unrelated-fixture-owner', 'active')",
+      );
+    }
+    async function publicSnapshot() {
+      const tables = await inspection.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+      );
+      const columns = await inspection.query(
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' ORDER BY ordinal_position",
+      );
+      const sessions = await inspection.query(
+        "SELECT id::text, user_id, status FROM public.sessions ORDER BY id",
+      );
+      return {
+        tables: tables.rows,
+        columns: columns.rows,
+        sessions: sessions.rows,
+      };
+    }
+
+    it("initializes and uses branchlab while preserving an incompatible public.sessions table and its data", async () => {
+      await foreignSessions();
+      const before = await publicSnapshot();
+      const db = await database();
+      const session = await getSession(
+        new Request("http://localhost/api/config"),
+      );
+      expect(session.id).toMatch(/^[a-f0-9]{64}$/);
+      const selected = await db.execute(
+        "SELECT current_schema() AS schema, current_setting('search_path') AS path",
+      );
+      expect(selected.rows[0].schema).toBe("branchlab");
+      expect(String(selected.rows[0].path)).toContain("branchlab");
+      expect(String(selected.rows[0].path)).not.toContain("public");
+      expect(
+        (await inspection.query("SELECT id FROM branchlab.sessions")).rows,
+      ).toHaveLength(1);
+      expect(await publicSnapshot()).toEqual(before);
+    });
+
+    it("pins the selected search path on every pooled transaction and places temporary schemas last", async () => {
+      const db = await database();
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () =>
+          db.execute(
+            "SELECT pg_backend_pid() AS backend, current_schema() AS schema, current_setting('search_path') AS path, pg_sleep(0.02)",
+          ),
+        ),
+      );
+      expect(
+        new Set(results.map((result) => result.rows[0].backend)).size,
+      ).toBeGreaterThan(1);
+      for (const result of results) {
+        expect(result.rows[0].schema).toBe("branchlab");
+        expect(result.rows[0].path).toBe("branchlab, pg_temp");
+      }
+      await db.execute("SET LOCAL search_path TO public");
+      expect(
+        (await db.execute("SELECT current_schema() AS schema")).rows[0].schema,
+      ).toBe("branchlab");
+    });
+
+    it("rejects an explicit incompatible public schema before changing any existing tables or rows", async () => {
+      await foreignSessions();
+      const before = await publicSnapshot();
+      vi.stubEnv("DATABASE_SCHEMA", "public");
+      await expect(database()).rejects.toMatchObject({
+        code: "DATABASE_SCHEMA",
+        status: 503,
+      });
+      expect(await publicSnapshot()).toEqual(before);
+    });
+
+    it("supports an explicitly selected compatible legacy public schema without moving its data", async () => {
+      vi.stubEnv("DATABASE_SCHEMA", "public");
+      await database();
+      const original = await getSession(
+        new Request("http://localhost/api/config"),
+      );
+      await closeDatabase();
+      const reopened = await database();
+      expect(
+        (await reopened.execute("SELECT current_schema() AS schema")).rows[0]
+          .schema,
+      ).toBe("public");
+      const retained = await getSession(
+        new Request("http://localhost/api/config", {
+          headers: { cookie: `branchlab_session=${original.id}` },
+        }),
+      );
+      expect(retained.id).toBe(original.id);
+      const namespaces = await inspection.query(
+        "SELECT nspname FROM pg_namespace WHERE nspname = 'branchlab'",
+      );
+      expect(namespaces.rows).toHaveLength(0);
+    });
+
+    it("creates a custom namespace and refuses a same-shaped table without its required unique key", async () => {
+      vi.stubEnv("DATABASE_SCHEMA", "branchlab_custom_test");
+      await database();
+      await closeDatabase();
+      await inspection.query(
+        "ALTER TABLE branchlab_custom_test.sessions DROP CONSTRAINT sessions_pkey",
+      );
+      await expect(database()).rejects.toMatchObject({
+        code: "DATABASE_SCHEMA",
+        message: expect.stringContaining("missing unique key id"),
+      });
+    });
+
+    it("rejects a missing operation default before the first request can fail during insertion", async () => {
+      await database();
+      await closeDatabase();
+      await inspection.query(
+        "ALTER TABLE branchlab.operations ALTER COLUMN attempt DROP DEFAULT",
+      );
+      await expect(database()).rejects.toMatchObject({
+        code: "DATABASE_SCHEMA",
+        message: expect.stringContaining("expected attempt default 1"),
+      });
+    });
+
+    it("rejects deferrable uniqueness that PostgreSQL cannot use for ON CONFLICT", async () => {
+      await database();
+      await closeDatabase();
+      await inspection.query(
+        "ALTER TABLE branchlab.operations DROP CONSTRAINT operations_owner_request_key_key",
+      );
+      await inspection.query(
+        "ALTER TABLE branchlab.operations ADD CONSTRAINT operations_owner_request_key_key UNIQUE (owner, request_key) DEFERRABLE INITIALLY IMMEDIATE",
+      );
+      await expect(database()).rejects.toMatchObject({
+        code: "DATABASE_SCHEMA",
+        message: expect.stringContaining(
+          "missing unique key owner,request_key",
+        ),
+      });
     });
   },
 );

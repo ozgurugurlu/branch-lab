@@ -13,6 +13,23 @@ import type {
 } from "./database-client";
 import { AppError } from "./errors";
 
+/** One operator-owned namespace, never a SQL fragment or a search-path list. */
+export function postgresSchema(value = process.env.DATABASE_SCHEMA): string {
+  const schema = value?.trim() || "branchlab";
+  if (
+    !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(schema) ||
+    /^pg_/i.test(schema) ||
+    schema.toLowerCase() === "information_schema"
+  ) {
+    throw new AppError(
+      "DATABASE_SCHEMA",
+      "DATABASE_SCHEMA must be one non-system PostgreSQL identifier of at most 63 letters, digits or underscores, starting with a letter or underscore.",
+      503,
+    );
+  }
+  return schema;
+}
+
 /** Parse explicitly: do not inherit PGHOST/PGPASSWORD or URL options that redirect credentials. */
 export function postgresConfig(value: string): PoolConfig {
   try {
@@ -90,7 +107,7 @@ function statementParts(statement: Statement) {
     : { sql: statement.sql, args: statement.args ?? [] };
 }
 async function executeOn(
-  client: Pool | PoolClient,
+  client: PoolClient,
   statement: Statement,
 ): Promise<QueryResult> {
   const { sql, args } = statementParts(statement);
@@ -98,6 +115,7 @@ async function executeOn(
 }
 
 export function createPostgresClient(connectionURL: string): DatabaseClient {
+  const schema = postgresSchema();
   const pool = new Pool(postgresConfig(connectionURL));
   pool.on("error", () =>
     console.error(
@@ -107,9 +125,49 @@ export function createPostgresClient(connectionURL: string): DatabaseClient {
       }),
     ),
   );
+  async function transaction<T>(
+    execute: (transaction: DatabaseExecutor) => Promise<T>,
+    serializable: boolean,
+  ): Promise<T> {
+    // SET LOCAL runs on every checked-out transaction, including single queries.
+    // This does not rely on session state surviving a Neon/PgBouncer pool hop.
+    for (let attempt = 0; ; attempt++) {
+      const client = await pool.connect();
+      try {
+        await client.query(
+          serializable
+            ? "BEGIN ISOLATION LEVEL SERIALIZABLE"
+            : "BEGIN ISOLATION LEVEL READ COMMITTED",
+        );
+        await client.query(`SET LOCAL search_path TO "${schema}", pg_temp`);
+        const result = await execute({
+          execute: (statement) => executeOn(client, statement),
+        });
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        const code = (error as { code?: unknown })?.code;
+        if (
+          !serializable ||
+          attempt >= 7 ||
+          (code !== "40001" && code !== "40P01")
+        )
+          throw error;
+      } finally {
+        client.release();
+      }
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.min(5 * 2 ** attempt, 100) + Math.random() * 10,
+        ),
+      );
+    }
+  }
   const database: DatabaseClient = {
     dialect: "postgres",
-    execute: (statement) => executeOn(pool, statement),
+    execute: (statement) => transaction((tx) => tx.execute(statement), false),
     async batch(statements) {
       return database.transaction(async (transaction) => {
         const results: QueryResult[] = [];
@@ -118,36 +176,7 @@ export function createPostgresClient(connectionURL: string): DatabaseClient {
         return results;
       });
     },
-    async transaction<T>(
-      execute: (transaction: DatabaseExecutor) => Promise<T>,
-    ): Promise<T> {
-      // Serializable isolation protects quota/read-then-write predicates across connections.
-      // Only these short SQL callbacks are repeated; no model inference runs here.
-      for (let attempt = 0; ; attempt++) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-          const result = await execute({
-            execute: (statement) => executeOn(client, statement),
-          });
-          await client.query("COMMIT");
-          return result;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          const code = (error as { code?: unknown })?.code;
-          if (attempt >= 7 || (code !== "40001" && code !== "40P01"))
-            throw error;
-        } finally {
-          client.release();
-        }
-        await new Promise((resolve) =>
-          setTimeout(
-            resolve,
-            Math.min(5 * 2 ** attempt, 100) + Math.random() * 10,
-          ),
-        );
-      }
-    },
+    transaction: (execute) => transaction(execute, true),
     close: () => pool.end(),
   };
   return database;

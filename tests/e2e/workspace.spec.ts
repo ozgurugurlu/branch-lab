@@ -371,3 +371,40 @@ test("pause saves the current round and workspace erasure clears private state",
     page.getByRole("navigation", { name: "Saved chats" }).getByRole("button"),
   ).toHaveCount(0);
 });
+
+test("configuration bootstrap errors offer setup recovery without claiming saved progress", async ({
+  page,
+}) => {
+  let configurationRequests = 0;
+  await page.route("**/api/config", async (route) => {
+    configurationRequests++;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "DATABASE_SCHEMA",
+          message: "The workspace database schema needs attention.",
+          retryable: true,
+          requestId: "bootstrap-recovery-check",
+        },
+      }),
+    });
+  });
+  await page.reload();
+  const banner = page.locator(".error-banner");
+  await expect(banner).toContainText("database schema and migrations");
+  await expect(banner).not.toContainText("saved checkpoint");
+  await expect(banner).not.toContainText("model charges");
+  await expect(banner).toContainText("bootstrap-recovery-check");
+  await page
+    .getByRole("button", { name: "Reload workspace", exact: true })
+    .click();
+  await expect.poll(() => configurationRequests).toBe(2);
+  await page.unroute("**/api/config");
+  await page
+    .getByRole("button", { name: "Reload workspace", exact: true })
+    .click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByLabel("Describe a scenario")).toBeVisible();
+});

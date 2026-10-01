@@ -1,4 +1,5 @@
 import { database, storageMode } from "@/server/db";
+import { databaseError } from "@/server/database-errors";
 import { version } from "../../../../package.json";
 
 export const runtime = "nodejs";
@@ -9,14 +10,14 @@ export async function GET() {
       { data: { status: "ok", storage: storageMode(), version } },
       { headers: { "Cache-Control": "no-store" } },
     );
-  } catch {
+  } catch (error) {
+    const failure = databaseError(error);
     return Response.json(
       {
         error: {
-          code: "DATABASE_UNAVAILABLE",
-          message:
-            "Database is unavailable. Check the server database configuration.",
-          retryable: true,
+          code: failure.code,
+          message: failure.message,
+          retryable: failure.retryable,
         },
       },
       { status: 503, headers: { "Cache-Control": "no-store" } },

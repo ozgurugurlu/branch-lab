@@ -15,6 +15,7 @@ import { z } from "zod";
 import { POST as login } from "../src/app/api/session/route";
 import { EngineError } from "../src/mastra/errors";
 import { closeDatabase, database } from "../src/server/db";
+import { databaseError } from "../src/server/database-errors";
 import { AppError, publicError } from "../src/server/errors";
 import { api, body, withDeadline } from "../src/server/http";
 import { ModelConfigurationError } from "../src/server/models";
@@ -368,6 +369,39 @@ describe("API responses and error privacy", () => {
       JSON.stringify({
         event: "api_failure",
         code: "OPERATION_FAILED",
+        path: "/api/unknown",
+        requestId: payload.error.requestId,
+      }),
+    );
+  });
+
+  it("returns an actionable database error without logging driver details", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sensitive = "private-database-credential-and-row";
+    const response = await api(request(), async () => {
+      throw databaseError(
+        Object.assign(new Error(sensitive), {
+          code: "42703",
+          detail: sensitive,
+          query: sensitive,
+        }),
+      );
+    });
+    expect(response.status).toBe(503);
+    const payload = await response.json();
+    expect(payload.error).toMatchObject({
+      code: "DATABASE_SCHEMA",
+      retryable: false,
+    });
+    expect(payload.error.message).toContain("DATABASE_SCHEMA=branchlab");
+    expect(payload.error.message).not.toContain("last saved");
+    expect(JSON.stringify(payload)).not.toContain(sensitive);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(sensitive);
+    expect(response.headers.get("X-Request-ID")).toBe(payload.error.requestId);
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "api_failure",
+        code: "DATABASE_SCHEMA",
         path: "/api/unknown",
         requestId: payload.error.requestId,
       }),

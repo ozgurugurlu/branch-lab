@@ -152,19 +152,50 @@ export const post = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-export function recoveryHint(error: RequestError) {
+export type RecoveryContext = "workspace" | "draft" | "simulation";
+
+const databaseRecovery: Record<string, string> = {
+  DATABASE_SCHEMA:
+    "Ask the operator to check the workspace database schema and migrations, then reload the workspace.",
+  DATABASE_PERMISSION:
+    "Ask the operator to check the database user's schema and table permissions, then reload the workspace.",
+  DATABASE_CONFIGURATION:
+    "Ask the operator to check the server's database configuration, then reload the workspace.",
+  DATABASE_AUTHENTICATION:
+    "Ask the operator to verify the server-side database credentials, then reload the workspace.",
+  DATABASE_TLS:
+    "Ask the operator to check the database TLS settings and certificate, then reload the workspace.",
+  DATABASE_UNAVAILABLE:
+    "Check the workspace server and database connection, then reload the workspace. If the issue persists, contact the operator.",
+};
+
+export function isDatabaseSetupError(error: RequestError) {
+  return Object.hasOwn(databaseRecovery, error.code);
+}
+
+export function recoveryHint(
+  error: RequestError,
+  context: RecoveryContext = "simulation",
+) {
+  if (isDatabaseSetupError(error)) return databaseRecovery[error.code];
   if (error.status === 401)
-    return "Unlock the workspace to continue. Your draft stays in this browser tab.";
+    return context === "workspace"
+      ? "Unlock the workspace to continue."
+      : "Unlock the workspace to continue. Your draft stays in this browser tab.";
   if (error.status === 429)
     return error.retryAfter
       ? `Wait at least ${error.retryAfter} seconds before trying again.`
       : "Wait before trying again. Provider or workspace limits may apply.";
+  if (context === "workspace")
+    return "Check the workspace connection and server setup, then reload the workspace. If the issue persists, contact the operator.";
   if (error.status === 409)
     return "Another operation may still be running. Refresh saved state before continuing.";
   if (
     ["NETWORK_UNAVAILABLE", "INVALID_RESPONSE", "TIMEOUT"].includes(error.code)
   )
     return "The server may have finished after the connection was lost. Refresh first to avoid repeating work or model charges.";
+  if (context === "draft")
+    return "Your draft stays in this browser tab. Review the message and your settings before trying again.";
   return error.retryable
     ? "Your last saved checkpoint remains available. Refresh saved state before retrying."
     : "Review the message and your settings before submitting again.";

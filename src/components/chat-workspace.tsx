@@ -355,7 +355,7 @@ export function ChatWorkspace(props: Props) {
               Demo runs stay in the configured workspace database. Cloud models
               require explicit consent.
             </p>
-            <InlineRequestError error={error} />
+            <InlineRequestError error={error} context="draft" />
           </div>
         ) : (
           <div className="conversation-content">

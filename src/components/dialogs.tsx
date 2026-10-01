@@ -616,7 +616,7 @@ export function NewSimulationDialog({
               ? "Reading selected documents…"
               : "Up to 6 documents and 48k characters total. CSV is read as plain text."}
           </p>
-          <InlineRequestError error={error} />
+          <InlineRequestError error={error} context="draft" />
         </fieldset>
         <div className="dialog-footer">
           <span>Explore possibilities. Make assumptions visible.</span>
@@ -811,7 +811,7 @@ export function SettingsDialog({
             on shared deployments.
           </p>
         )}
-        <InlineRequestError error={error} />
+        <InlineRequestError error={error} context="workspace" />
         <div className="settings-storage">
           <span>Persistence</span>
           <span>
@@ -827,7 +827,7 @@ export function SettingsDialog({
             </h3>
             {privacyError ? (
               <>
-                <InlineRequestError error={privacyError} />
+                <InlineRequestError error={privacyError} context="workspace" />
                 <button
                   className="text-button"
                   onClick={() => setPrivacyAttempt((value) => value + 1)}

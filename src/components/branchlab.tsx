@@ -9,6 +9,7 @@ import {
   RequestError,
   requestError,
   recoveryHint,
+  isDatabaseSetupError,
   resetMutationRequests,
 } from "./client-api";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -186,7 +187,7 @@ export function Branchlab() {
       if (epoch !== requestEpoch.current || controller.signal.aborted) return;
       const failure = requestError(e);
       setError(failure);
-      if (failure.status === 401) {
+      if (failure.status === 401 && !isDatabaseSetupError(failure)) {
         setSimulation(null);
         setRuns([]);
         activeId.current = null;
@@ -570,6 +571,8 @@ export function Branchlab() {
     setDraftInput(undefined);
     setModal("new");
   }
+  const needsUnlock = error?.status === 401 && !isDatabaseSetupError(error);
+  const setupFailed = error !== null && isDatabaseSetupError(error);
   const latest = simulation?.rounds.at(-1);
   const validParent = parent?.id === simulation?.parentId ? parent : null;
   const canStep = simulation && simulation.rounds.length < simulation.maxRounds;
@@ -693,7 +696,9 @@ export function Branchlab() {
           <div className="error-banner" role="alert">
             <div className="error-copy">
               <span>{error.message}</span>
-              <small>{recoveryHint(error)}</small>
+              <small>
+                {recoveryHint(error, simulation ? "simulation" : "workspace")}
+              </small>
               {error.requestId && (
                 <small className="error-request-id">
                   Request ID <code>{error.requestId}</code>
@@ -704,17 +709,19 @@ export function Branchlab() {
               className="text-button"
               disabled={Boolean(busy) || loading || !online}
               onClick={() =>
-                error.status === 401
+                needsUnlock
                   ? setModal("settings")
-                  : simulation
+                  : simulation && !setupFailed
                     ? void selectRun(simulation.id)
                     : void initialize()
               }
             >
               <RotateCcw size={13} />
-              {error.status === 401
+              {needsUnlock
                 ? "Unlock workspace"
-                : "Refresh saved state"}
+                : simulation && !setupFailed
+                  ? "Refresh saved state"
+                  : "Reload workspace"}
             </button>
             <button
               className="icon-button"

@@ -3,6 +3,7 @@
 // PostgreSQL suite reads TEST_DATABASE_URL and requires a disposable *_test DB.
 for (const name of [
   "DATABASE_URL",
+  "DATABASE_SCHEMA",
   "DATABASE_SSL_CA",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",

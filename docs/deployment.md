@@ -21,7 +21,7 @@ Enable Fluid Compute and confirm your plan permits the routes' declared **240-se
 | Turso/libSQL                      | `TURSO_DATABASE_URL=libsql://…` and `TURSO_AUTH_TOKEN` | Vercel, Docker, persistent Node          |
 | Local SQLite through libSQL       | `TURSO_DATABASE_URL=file:.data/branchlab.db`           | Local development or a persistent volume |
 
-A nonempty **`DATABASE_URL` takes precedence** over the Turso settings. Changing the connection selects a different database; it does not transfer existing runs. Use a dedicated application database and credentials scoped to it. Startup creates tables, indexes and an additive schema-version record; it does not reset existing runs.
+A nonempty **`DATABASE_URL` takes precedence** over the Turso settings. Changing the connection selects a different database; it does not transfer existing runs. Use a dedicated application database and credentials scoped to it. Startup creates tables, indexes and an additive schema-version record after checking existing application-table metadata; it does not reset or relocate existing runs.
 
 ### Neon / PostgreSQL
 
@@ -29,7 +29,14 @@ Use your Neon's **pooled** connection URL, with its actual username, encoded pas
 
 ```dotenv
 DATABASE_URL=postgresql://USER:PASSWORD@YOUR-ENDPOINT-pooler.neon.tech/DATABASE?sslmode=require&channel_binding=require
+DATABASE_SCHEMA=branchlab
 ```
+
+**Schema isolation:** PostgreSQL defaults to the dedicated `branchlab` schema. Other applications' `public.sessions` or similarly named tables are not read, modified or used as fallbacks. The database role needs permission to create the selected schema, or an operator must pre-create it with the required ownership/permissions. `DATABASE_SCHEMA` accepts one non-system ASCII identifier, up to 63 letters, digits or underscores, beginning with a letter or underscore; SQL fragments and search-path lists are rejected.
+
+Every checked-out transaction—including a single query—sets its own search path to the selected schema, then `pg_temp`. PostgreSQL's catalog remains implicitly available; `public` is absent unless explicitly selected. This uses transaction-local state and does not rely on session settings surviving a Neon pooler handoff. Single queries retain READ COMMITTED isolation; explicit transactional writes use SERIALIZABLE.
+
+For an **existing, compatible Branchlab installation whose data is already in `public`**, explicitly set `DATABASE_SCHEMA=public` to continue using it. Changing the default to `branchlab` selects a separate workspace store; existing public-schema data remains in place. There is no automatic migration or fallback. Do not choose `public` when its tables belong to another application. Startup rejects incompatible application columns, types, defaults or uniqueness requirements with `DATABASE_SCHEMA` before application-table initialization or retention cleanup; existing tables are not repaired or deleted automatically.
 
 Only `sslmode` and `channel_binding` URL options are accepted. Remote connections always verify the TLS certificate and hostname, including when `sslmode=require` is supplied. `sslmode=verify-full` is also accepted. Plain connections and `sslmode=disable` are permitted only for loopback or `host.docker.internal`; a private LAN address still requires TLS. An optional `DATABASE_SSL_CA` can contain a private server's PEM certificate authority. Ambient `PGHOST` and `PGPASSWORD` settings are not used.
 
@@ -74,6 +81,6 @@ For host inference on macOS/Windows Docker, use `http://host.docker.internal:114
 
 ## Verification boundary
 
-Local SQLite and a real PostgreSQL 17 server were exercised, including transactions, ownership, quotas, lease fencing and concurrent deletion. CI supplies its own PostgreSQL service. The PostgreSQL suite uses an explicit `TEST_DATABASE_URL` and requires a disposable database name ending in `_test`; it truncates application tables.
+Local SQLite and a real PostgreSQL 17 server were exercised, including transactions, ownership, quotas, lease fencing, concurrent deletion and isolation from incompatible public-schema tables. CI supplies its own PostgreSQL service. The PostgreSQL suite uses an explicit `TEST_DATABASE_URL` and requires a disposable database name ending in `_test`; it truncates application tables.
 
-A live Neon account, remote Turso, cloud-model credentials, Brave credentials, DNS/TLS proxy setup and deployment to Vercel still need verification with your own configuration. Automated demo tests establish software behavior, not forecasting accuracy or provider availability.
+A configured Neon pooled endpoint was also checked with schema initialization, workspace authentication, demo creation, a saved round and erasure of the temporary verification workspace. This checks that particular connection; validate your own account and permissions. Remote Turso, cloud-model credentials, Brave credentials, DNS/TLS proxy setup and deployment to Vercel still need verification with your configuration. Automated demo tests establish software behavior, not forecasting accuracy or provider availability.

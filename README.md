@@ -68,6 +68,8 @@ Each HTTP operation executes at most one bounded round. Completed state is durab
 
 A Docker image is also provided for self-hosting with a persistent volume. Cloudflare Workers is not a tested deployment target for this version; the documented path uses Vercel's Node runtime. [Full deployment instructions](docs/deployment.md).
 
+PostgreSQL tables use the dedicated `branchlab` schema by default, avoiding collisions with other applications' tables. `DATABASE_SCHEMA` selects another application namespace. Existing installations whose compatible Branchlab tables are in `public` must explicitly set `DATABASE_SCHEMA=public` to keep using them; switching schemas does not move data. Startup rejects incompatible tables before session cleanup or application writes.
+
 ## Development
 
 ```sh
