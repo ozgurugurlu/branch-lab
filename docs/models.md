@@ -1,6 +1,6 @@
 # Models and provider configuration
 
-Branchlab runs without credentials in **Demo engine** mode. Its generated dialogue and deterministic state updates are examples, not live model inference. Cloud and local model runs are selected explicitly; provider errors never switch a live run into demo mode.
+Branchlab runs without credentials in **Demo engine** mode. Its generated dialogue and deterministic state updates are examples, not live model inference. When Google is configured, new scenarios preselect **Gemini 3.8 Flash**; you can change the provider/model, and cloud inference still requires processing consent. Provider errors never switch a live run into demo mode.
 
 ## Cloud models
 
@@ -25,6 +25,8 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-google-key
 ```
 
 Google also accepts `GEMINI_API_KEY` and `GOOGLE_API_KEY`, in that precedence order after `GOOGLE_GENERATIVE_AI_API_KEY`. None use a `NEXT_PUBLIC_` prefix. Keys are not accepted from the browser, stored in simulations, or included in configuration responses. Cloud API base URLs are pinned to their official endpoints; `OPENAI_BASE_URL` does not override this. Provider HTTP redirects are rejected so prompts and credentials cannot follow them to another destination. Restart the development server after environment changes. On a hosting platform, update deployment secrets and redeploy.
+
+`npm run db:prepare` checks and initializes database storage only. It does not call a model or validate these keys. `npm run dev` performs that database preparation before starting the app; see [startup and environment loading](deployment.md#prepare-the-database).
 
 Official references: [OpenAI catalog](https://developers.openai.com/api/docs/models), [GPT-6 endpoint guidance](https://developers.openai.com/api/docs/guides/latest-model), [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models?hl=en). Google currently limits Gemini 2.5 access to previous users and recommends newer models for new projects.
 

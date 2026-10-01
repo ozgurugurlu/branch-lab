@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MODEL_CONFIG,
   PROVIDERS,
+  getInitialModelConfig,
   isSupportedModel,
 } from "../src/lib/providers";
 import {
@@ -32,14 +33,24 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("public model catalog", () => {
-  it("starts with a usable demo and no implicit live provider", () => {
+  it("prefers Gemini Flash only when configured and keeps a usable keyless demo", () => {
+    expect(DEFAULT_MODEL_CONFIG).toEqual({
+      provider: "google",
+      model: "gemini-3.8-flash",
+    });
     expect(isSupportedModel(DEFAULT_MODEL_CONFIG)).toBe(true);
     expect(
       getProviderStatuses()
         .filter((provider) => provider.configured)
         .map((provider) => provider.id),
     ).toEqual(["demo"]);
-    expect(() => resolveModel(DEFAULT_MODEL_CONFIG)).toThrow("demo engine");
+    const fallback = getInitialModelConfig(getProviderStatuses());
+    expect(fallback).toEqual({ provider: "demo", model: "branchlab-demo" });
+    expect(() => resolveModel(fallback)).toThrow("demo engine");
+    vi.stubEnv("GOOGLE_GENERATIVE_AI_API_KEY", "test-key");
+    const configured = getInitialModelConfig(getProviderStatuses());
+    expect(configured).toEqual(DEFAULT_MODEL_CONFIG);
+    expect(configured).not.toBe(DEFAULT_MODEL_CONFIG);
   });
 
   it("requires catalog cloud models while allowing namespaced local identifiers", () => {

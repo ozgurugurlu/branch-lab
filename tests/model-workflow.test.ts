@@ -37,7 +37,7 @@ type Captured = {
   payload: Record<string, unknown>;
   text: string;
 };
-const input: CreateSimulationInput = {
+const input = {
   title: "Protocol fixture",
   question: "Will stakeholders support a reversible neighborhood pilot?",
   context: "Synthetic protocol test, without external inference.",
@@ -46,7 +46,7 @@ const input: CreateSimulationInput = {
   maxRounds: 3,
   actorCount: 4,
   sources: [],
-};
+} satisfies CreateSimulationInput;
 const sources: Source[] = [
   {
     id: "source-1",

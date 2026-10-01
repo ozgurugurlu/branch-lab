@@ -97,9 +97,31 @@ export const PROVIDERS: ProviderStatus[] = [
 ];
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  provider: "demo",
-  model: "branchlab-demo",
+  provider: "google",
+  model: "gemini-3.8-flash",
 };
+
+/** Prefer the configured chat default; keep a no-credential demo explicit. */
+export function getInitialModelConfig(
+  providers: ProviderStatus[] = PROVIDERS,
+): ModelConfig {
+  return providers.some(
+    (provider) =>
+      provider.id === DEFAULT_MODEL_CONFIG.provider &&
+      provider.configured &&
+      provider.models.some((model) => model.id === DEFAULT_MODEL_CONFIG.model),
+  )
+    ? { ...DEFAULT_MODEL_CONFIG }
+    : { provider: "demo", model: "branchlab-demo" };
+}
+
+/** Product-level availability guidance; exact server settings remain in Settings. */
+export function providerUnavailableReason(provider: ProviderStatus): string {
+  if (provider.configured) return "";
+  if (provider.id === "ollama" || provider.id === "lmstudio")
+    return "The operator must enable local models and connect a reachable model server. See Settings for setup details.";
+  return `${provider.name} needs a server-side API key. Ask the operator to configure it in Settings.`;
+}
 
 export function isLocalProvider(provider: ProviderId): boolean {
   return provider === "ollama" || provider === "lmstudio";

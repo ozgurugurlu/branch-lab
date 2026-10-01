@@ -38,9 +38,11 @@ cp -n .env.example .env.local
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000) and choose **Explore a demo**. The demo uses deterministic rules and is visibly labeled; it does not call an LLM. SQLite tables are created automatically at `.data/branchlab.db`, with no separate migration command. `cp -n` preserves an existing `.env.local`.
+`npm run dev` prepares the database before starting Next.js and stops with a safe error if preparation fails. To prepare it separately after configuring `.env.local`, run **`npm run db:prepare`**; no application server is needed. The command preserves existing data and closes its connection. `npm ci` and `npm run build` do not prepare or connect to the database. [Preparation and environment precedence](docs/deployment.md#prepare-the-database).
 
-For live inference, add **one** provider key to `.env.local`, restart the server, then select that provider when creating a scenario:
+Open [localhost:3000](http://localhost:3000) and choose **Explore a demo**. The demo uses deterministic rules and is visibly labeled; it does not call an LLM. SQLite defaults to `.data/branchlab.db`. `cp -n` preserves an existing `.env.local`. Opening a workspace still loads configuration, its browser session and saved history; a remote database may need to wake from inactivity.
+
+For live inference, add **one** provider key to `.env.local`, restart the server, then select that provider when creating a scenario. When Google is configured, Gemini 3.8 Flash is preselected; cloud processing still requires your consent. Simulation and branch names are optional. An unnamed simulation is saved as **Untitled simulation**; its question stays separate.
 
 ```dotenv
 OPENAI_API_KEY=your-openai-key

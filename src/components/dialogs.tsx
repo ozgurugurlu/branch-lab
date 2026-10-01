@@ -29,7 +29,12 @@ import type {
 import { api } from "./client-api";
 import { InlineRequestError } from "./request-error";
 import { ProcessTrace } from "./process-trace";
-import { PROVIDERS } from "@/lib/providers";
+import {
+  PROVIDERS,
+  getInitialModelConfig,
+  providerUnavailableReason,
+} from "@/lib/providers";
+import { ModelPicker } from "./model-picker";
 import { TEMPLATES, type ScenarioTemplate } from "@/lib/templates";
 
 export function Dialog({
@@ -60,6 +65,7 @@ export function Dialog({
     document.body.style.overflow = "hidden";
     ref.current?.focus();
     const handle = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -168,11 +174,11 @@ export function NewSimulationDialog({
 }) {
   const first = initialDraft
     ? { input: initialDraft }
-    : (initialTemplate ?? TEMPLATES[0]);
-  const providers = config?.providers.length
-    ? config.providers
-    : [FALLBACK_PROVIDER];
-  const [title, setTitle] = useState(first.input.title);
+    : (initialTemplate ?? {
+        input: { title: "", question: "", context: "", sources: [] },
+      });
+  const providers = config?.providers.length ? config.providers : PROVIDERS;
+  const [title, setTitle] = useState(first.input.title ?? "");
   const [question, setQuestion] = useState(first.input.question);
   const [context, setContext] = useState(first.input.context);
   const [sources, setSources] = useState<CreateSimulationInput["sources"]>(
@@ -184,14 +190,10 @@ export function NewSimulationDialog({
   const [allowWebSearch, setAllowWebSearch] = useState(
     initialDraft?.privacy?.allowWebSearch ?? false,
   );
-  const [provider, setProvider] = useState<ProviderId>(
-    initialDraft?.model.provider ?? "demo",
-  );
-  const [model, setModel] = useState(
-    initialDraft?.model.model ??
-      providers.find((p) => p.id === "demo")?.models[0]?.id ??
-      "branchlab-demo",
-  );
+  const initialModel = initialDraft?.model ?? getInitialModelConfig(providers);
+  const [provider, setProvider] = useState<ProviderId>(initialModel.provider);
+  const [model, setModel] = useState(initialModel.model);
+  const [manualModel, setManualModel] = useState(Boolean(initialDraft));
   const [count, setCount] = useState(initialDraft?.actorCount ?? 8);
   const [rounds, setRounds] = useState(initialDraft?.maxRounds ?? 6);
   const [seed, setSeed] = useState(initialDraft?.seed ?? 42);
@@ -203,7 +205,7 @@ export function NewSimulationDialog({
   const isLocal = provider === "ollama" || provider === "lmstudio";
   const fileRef = useRef<HTMLInputElement>(null);
   function selectTemplate(template: ScenarioTemplate) {
-    setTitle(template.input.title);
+    setTitle(template.input.title ?? "");
     setQuestion(template.input.question);
     setContext(template.input.context);
     setSources(template.input.sources);
@@ -263,6 +265,8 @@ export function NewSimulationDialog({
           if (importing) return;
           setError("");
           try {
+            if (!selectedProvider.configured)
+              throw new Error(providerUnavailableReason(selectedProvider));
             if ((provider === "openai" || provider === "google") && !allowCloud)
               throw new Error(
                 "Allow cloud model processing or choose a local/demo provider.",
@@ -326,14 +330,16 @@ export function NewSimulationDialog({
           </div>
           <div className="form-grid">
             <label className="field full">
-              Simulation name
+              Simulation name{" "}
+              <span className="optional" aria-hidden="true">
+                Optional
+              </span>
               <input
-                required
-                minLength={3}
+                aria-label="Simulation name"
                 maxLength={100}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="A short name for your experiment"
+                placeholder="Optional label for this simulation"
               />
             </label>
             <label className="field full">
@@ -448,50 +454,48 @@ export function NewSimulationDialog({
             access them.
           </p>
           <div className="form-grid model-fields">
-            <label className="field">
-              Model provider
-              <select
-                value={provider}
-                onChange={(e) => {
-                  const id = e.target.value as ProviderId;
-                  setProvider(id);
-                  setModel(
-                    providers.find((p) => p.id === id)?.models[0]?.id ?? "",
-                  );
+            <div className="field full">
+              <span>Model</span>
+              <ModelPicker
+                variant="field"
+                value={{ provider, model }}
+                providers={providers}
+                disabled={busy}
+                onChange={(next) => {
+                  setProvider(next.provider);
+                  setModel(next.model);
+                  setManualModel(true);
                 }}
-              >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.configured}>
-                    {p.name}
-                    {!p.configured ? " · not configured" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              Model
-              {isLocal ? (
+              />
+            </div>
+            {isLocal && (
+              <label className="field full">
+                Installed model ID
                 <input
                   required
                   maxLength={200}
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="Your installed model ID"
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="The model ID shown by your local server"
                 />
-              ) : (
-                <select
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                >
-                  {selectedProvider.models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                      {m.preview ? " (preview)" : ""}
-                    </option>
-                  ))}
-                </select>
+                <small>
+                  Use a model already installed on the connected server.
+                </small>
+              </label>
+            )}
+            {!selectedProvider.configured && (
+              <p className="model-availability-note">
+                {providerUnavailableReason(selectedProvider)}
+              </p>
+            )}
+            {!manualModel &&
+              provider === "demo" &&
+              !providers.find((item) => item.id === "google")?.configured && (
+                <p className="model-default-note">
+                  Gemini isn’t configured here. Demo is selected and makes no
+                  model requests.
+                </p>
               )}
-            </label>
           </div>
           <section
             className="source-disclosure"
@@ -534,7 +538,7 @@ export function NewSimulationDialog({
             </label>
             <small>
               {!config?.webSearchConfigured
-                ? "Web search is unavailable until the operator configures Brave Search."
+                ? "Web search is off for this workspace. Ask the operator to connect Brave Search in Settings, then enable it for a live-model run."
                 : provider === "demo"
                   ? "Demo mode does not search the web."
                   : "Search queries and result snippets are exchanged with Brave Search. This is a separate permission from cloud model processing."}
@@ -628,6 +632,7 @@ export function NewSimulationDialog({
             disabled={
               busy ||
               importing ||
+              !selectedProvider.configured ||
               ((provider === "openai" || provider === "google") &&
                 !allowCloud) ||
               (provider !== "demo" &&
@@ -947,9 +952,7 @@ export function BranchDialog({
   onBranch: (intervention: string, title: string) => Promise<void>;
   busy: boolean;
 }) {
-  const [title, setTitle] = useState(
-    `${simulation.title.slice(0, 85)} · alternative`,
-  );
+  const [title, setTitle] = useState("");
   const [intervention, setIntervention] = useState("");
   const [error, setError] = useState<unknown>(null);
   return (
@@ -976,10 +979,13 @@ export function BranchDialog({
             simulation stays available for comparison.
           </p>
           <label className="field">
-            Branch name
+            Branch name{" "}
+            <span className="optional" aria-hidden="true">
+              Optional
+            </span>
             <input
-              required
-              minLength={3}
+              aria-label="Branch name"
+              placeholder="Optional label for this branch"
               value={title}
               maxLength={100}
               onChange={(e) => setTitle(e.target.value)}

@@ -32,7 +32,12 @@ import type {
   ModelConfig,
   Simulation,
 } from "@/lib/types";
-import { PROVIDERS } from "@/lib/providers";
+import {
+  PROVIDERS,
+  getInitialModelConfig,
+  providerUnavailableReason,
+} from "@/lib/providers";
+import { ModelPicker } from "./model-picker";
 import { CAPABILITY_PROFILES, capabilityProfileFor } from "@/lib/capabilities";
 import { TEMPLATES, type ScenarioTemplate } from "@/lib/templates";
 import { initials, stanceLabel } from "./network";
@@ -76,10 +81,10 @@ export function ChatWorkspace(props: Props) {
   const { simulation, creation, config, busy, actorId } = props;
   const [text, setText] = useState("");
   const [error, setError] = useState<unknown>(null);
-  const [model, setModel] = useState<ModelConfig>({
-    provider: "demo",
-    model: "branchlab-demo",
-  });
+  const [model, setModel] = useState<ModelConfig>(() =>
+    getInitialModelConfig(config?.providers ?? PROVIDERS),
+  );
+  const [manualModel, setManualModel] = useState(false);
   const [menu, setMenu] = useState(false);
   const creationFocus = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -135,7 +140,7 @@ export function ChatWorkspace(props: Props) {
   }, [menu]);
   function draft(question = text): CreateSimulationInput {
     return {
-      title: question.trim().slice(0, 85) || "Untitled scenario",
+      title: "",
       question: question.trim(),
       context: "",
       model,
@@ -151,6 +156,13 @@ export function ChatWorkspace(props: Props) {
     setError(null);
     try {
       if (!simulation) {
+        const provider = providers.find((item) => item.id === model.provider);
+        if (!provider?.configured)
+          throw new Error(
+            provider
+              ? providerUnavailableReason(provider)
+              : "Choose an available model.",
+          );
         if (question.trim().length < 12)
           throw new Error("Describe your scenario in at least 12 characters.");
         if (model.provider === "openai" || model.provider === "google") {
@@ -265,40 +277,15 @@ export function ChatWorkspace(props: Props) {
                 ?.name ?? selectedModel.model}
             </span>
           ) : (
-            <label className="composer-model-picker">
-              <span className="sr-only">Model</span>
-              <select
-                aria-label="Model"
-                value={`${model.provider}:${model.model}`}
-                disabled={disabled}
-                onChange={(event) => {
-                  const colon = event.target.value.indexOf(":");
-                  setModel({
-                    provider: event.target.value.slice(
-                      0,
-                      colon,
-                    ) as ModelConfig["provider"],
-                    model: event.target.value.slice(colon + 1),
-                  });
-                }}
-              >
-                {providers.map((provider) => (
-                  <optgroup key={provider.id} label={provider.name}>
-                    {provider.models.map((item) => (
-                      <option
-                        key={item.id}
-                        value={`${provider.id}:${item.id}`}
-                        disabled={!provider.configured}
-                      >
-                        {item.name}
-                        {!provider.configured ? " · configure first" : ""}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <ChevronDown size={12} />
-            </label>
+            <ModelPicker
+              value={model}
+              providers={providers}
+              disabled={disabled}
+              onChange={(next) => {
+                setModel(next);
+                setManualModel(true);
+              }}
+            />
           )}
           {props.running ? (
             <button
@@ -344,6 +331,15 @@ export function ChatWorkspace(props: Props) {
               Explore a question through a world of different perspectives.
             </p>
             <div className="home-composer">{composer}</div>
+            {!manualModel &&
+              model.provider === "demo" &&
+              !providers.find((provider) => provider.id === "google")
+                ?.configured && (
+                <p className="model-default-note">
+                  Gemini isn’t configured here. Demo is selected and makes no
+                  model requests.
+                </p>
+              )}
             <div className="chat-starters">
               {TEMPLATES.map((template) => (
                 <button

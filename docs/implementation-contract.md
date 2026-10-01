@@ -33,6 +33,8 @@ The browser supplies no provider keys, model base URLs or database URLs. Protect
 
 New runs accept 4–12 actors, 1–12 initial rounds, at most six text sources, 16,000 characters per source and 48,000 source characters total. New cloud runs require `privacy.allowCloud: true`; web search separately requires `privacy.allowWebSearch: true` and server configuration. Existing legacy runs without privacy fields remain readable and executable; explicit false cloud consent is always enforced. Text/Markdown imports are bounded strings, not arbitrary binary uploads or automatic URL fetching.
 
+Creation and branching accept an optional `title`, trimmed and limited to 100 characters. Empty or omitted titles save as `Untitled simulation` for a new run or the parent title followed by ` · branch` for a branch. Saved `Simulation.title` remains a nonempty string; the question is never copied into it. A scenario question and branch intervention remain required.
+
 Every source receives a stable run-local ID and SHA-256 content hash. `access: "actors"` is the default and permits deliberate actor assignment. `access: "analyst-only"` excludes the source from architect and actor inputs/tools. Analysts, the human workspace owner and exports can inspect all sources. Context and world assumptions are shared scenario data, not private-source fields.
 
 ## Idempotency and operation journal

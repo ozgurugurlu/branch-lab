@@ -6,6 +6,8 @@
   "description": "Explore what-if scenarios through simulation chat. Run AI actors, inspect their interactions, and compare branching outcomes with Mastra.",
   "license": "MIT",
   "scripts": {
+    "db:prepare": "node --import tsx scripts/db-prepare.mjs",
+    "predev": "npm run db:prepare",
     "dev": "next dev",
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
@@ -38,6 +40,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@next/env": "16.3.7",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22.19.15",
     "@types/pg": "^8.23.1",
@@ -46,6 +49,7 @@
     "eslint": "^9.39.4",
     "eslint-config-next": "16.3.7",
     "prettier": "3.9.9",
+    "tsx": "4.23.15",
     "typescript": "^5.9.3",
     "vitest": "5.0.3"
   }

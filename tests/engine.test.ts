@@ -32,7 +32,7 @@ vi.mock("@/server/models", () => ({
   }),
 }));
 
-const input: CreateSimulationInput = {
+const input = {
   title: "Neighborhood mobility",
   question: "Will residents support a car-free city center?",
   context:
@@ -42,7 +42,7 @@ const input: CreateSimulationInput = {
   actorCount: 6,
   maxRounds: 12,
   sources: [],
-};
+} satisfies CreateSimulationInput;
 const sources: Source[] = [
   {
     id: "source-1",

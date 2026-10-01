@@ -86,6 +86,9 @@ export function Branchlab() {
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [creation, setCreation] = useState<PendingCreation | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingStage, setLoadingStage] = useState(
+    "Checking workspace access…",
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<RequestError | null>(null);
   const [view, setView] = useState<View>("network");
@@ -159,6 +162,7 @@ export function Branchlab() {
     const controller = new AbortController();
     readController.current = controller;
     setLoading(true);
+    setLoadingStage("Checking workspace access…");
     setError(null);
     try {
       const settings = await api<AppConfig>("/api/config", {
@@ -166,6 +170,7 @@ export function Branchlab() {
       });
       if (epoch !== requestEpoch.current) return;
       setConfig(settings);
+      setLoadingStage("Loading saved chats…");
       const list = await api<SimulationSummary[]>("/api/simulations", {
         signal: controller.signal,
       });
@@ -180,13 +185,15 @@ export function Branchlab() {
       const id = list.some((r) => r.id === remembered)
         ? remembered
         : list[0]?.id;
-      if (id)
+      if (id) {
+        setLoadingStage("Restoring your last simulation…");
         accept(
           await api<Simulation>(`/api/simulations/${id}`, {
             signal: controller.signal,
           }),
           epoch,
         );
+      }
     } catch (e) {
       if (epoch !== requestEpoch.current || controller.signal.aborted) return;
       const failure = requestError(e);
@@ -802,9 +809,9 @@ export function Branchlab() {
           </div>
         )}
         {loading ? (
-          <div className="workspace-loading">
+          <div className="workspace-loading" role="status" aria-live="polite">
             <LoaderCircle size={18} className="spin" />
-            <span>Opening your workspace…</span>
+            <span>{loadingStage}</span>
           </div>
         ) : (
           <ChatWorkspace

@@ -2,6 +2,26 @@
 
 Branchlab 0.3 supports a Next.js **Node** deployment on Vercel, Docker or a persistent Node server. Use Node **22.13 or newer**. Cloudflare Workers configuration is not supplied or claimed compatible.
 
+## Prepare the database
+
+From the repository directory, install dependencies, copy the example without overwriting an existing file, and configure your database:
+
+```sh
+npm ci
+cp -n .env.example .env.local
+# Edit .env.local for Neon/PostgreSQL or Turso; the default uses local SQLite.
+npm run db:prepare
+npm run dev
+```
+
+`db:prepare` calls the application's existing schema initializer and then closes the database connection. It checks PostgreSQL compatibility and creates missing application tables/indexes and the schema-version record. Repeating it preserves existing records; it does not reset data, create a browser session, run retention cleanup or contact an LLM. `npm run dev` runs preparation automatically through `predev`, so the separate command is optional. A failure prints a safe error category and guidance and prevents the development server from starting.
+
+The command uses Next.js's environment loader. By default, its precedence is the existing shell environment, `.env.development.local`, `.env.local`, `.env.development`, then `.env`; variable expansion matches Next.js. Run `NODE_ENV=production npm run db:prepare` to check production environment files instead. Test mode omits `.env.local`. Keep database credentials in these server settings; the command never prints connection URLs or raw driver errors. [Next.js environment loading](https://nextjs.org/docs/app/guides/environment-variables).
+
+Preparation is a separate process, not a persistent database service. It does not start a managed Neon service, reserve a warm connection, or eliminate session/configuration/history loading in the browser. Neon may suspend again after inactivity. On its next connection the app still validates PostgreSQL table metadata; a compatible complete schema with the current version skips redundant DDL and migration-record writes.
+
+`npm ci` and `npm run build` never invoke database preparation. Production startup and the Docker image retain request-time initialization, so they need no preparation hook or development-only TypeScript runner. Use the optional command from a full source checkout with development dependencies installed; it is not included in the standalone runtime image. A successful preparation check does not verify model credentials or all runtime data-write permissions.
+
 ## Vercel
 
 1. Import your repository as a Next.js project. Use `npm run build` and the framework's default output settings.

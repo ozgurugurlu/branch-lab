@@ -59,6 +59,7 @@ const expectedDefaults: Record<string, Record<string, string>> = {
 
 /** Metadata only, before application table creation, reads, writes or retention. */
 async function validatePostgresSchema(tx: DatabaseExecutor, schema: string) {
+  let complete = true;
   const tables = Object.keys(expectedColumns)
     .map((name) => `'${name}'`)
     .join(",");
@@ -86,7 +87,10 @@ async function validatePostgresSchema(tx: DatabaseExecutor, schema: string) {
   });
   for (const [table, definition] of Object.entries(expectedColumns)) {
     const existing = columns.rows.filter((row) => row.table_name === table);
-    if (!existing.length) continue;
+    if (!existing.length) {
+      complete = false;
+      continue;
+    }
     const fail = (detail: string): never => {
       throw new AppError(
         "DATABASE_SCHEMA",
@@ -142,6 +146,7 @@ async function validatePostgresSchema(tx: DatabaseExecutor, schema: string) {
         fail(`missing unique key ${key}`);
     }
   }
+  return complete;
 }
 
 async function connect(): Promise<DatabaseClient> {
@@ -219,7 +224,13 @@ async function connect(): Promise<DatabaseClient> {
         });
         if (!namespace.rows.length)
           await tx.execute(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-        await validatePostgresSchema(tx, schema);
+        const complete = await validatePostgresSchema(tx, schema);
+        if (complete) {
+          const current = await tx.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 3",
+          );
+          if (current.rows.length) return;
+        }
         for (const statement of statements) await tx.execute(statement);
       });
     } else {

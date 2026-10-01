@@ -107,7 +107,7 @@ export interface Simulation {
   privacy?: { allowCloud: boolean; allowWebSearch?: boolean };
 }
 export interface CreateSimulationInput {
-  title: string;
+  title?: string;
   question: string;
   context: string;
   model: ModelConfig;

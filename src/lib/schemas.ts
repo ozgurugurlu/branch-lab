@@ -15,7 +15,7 @@ export const modelConfigSchema = z
   .strict();
 export const createSimulationSchema = z
   .object({
-    title: z.string().trim().min(3).max(100),
+    title: z.string().trim().max(100).optional(),
     question: z.string().trim().min(12).max(2000),
     context: z.string().trim().max(12000).default(""),
     model: modelConfigSchema,
@@ -60,7 +60,7 @@ export const stepSchema = z
 export const branchSchema = z
   .object({
     intervention: z.string().trim().min(12).max(2000),
-    title: z.string().trim().min(3).max(100).optional(),
+    title: z.string().trim().max(100).optional(),
     requestId: requestIdSchema,
   })
   .strict();

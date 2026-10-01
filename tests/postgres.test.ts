@@ -556,6 +556,62 @@ describe.skipIf(!testURL)(
       expect(namespaces.rows).toHaveLength(0);
     });
 
+    it("validates a prepared schema without requiring redundant DDL or migration-record writes", async () => {
+      await database();
+      await closeDatabase();
+      const role = `branchlab_prepare_${randomUUID().replaceAll("-", "")}`;
+      await inspection.query(`CREATE ROLE "${role}" LOGIN PASSWORD '${role}'`);
+      try {
+        await inspection.query(`GRANT USAGE ON SCHEMA branchlab TO "${role}"`);
+        await inspection.query(
+          `GRANT SELECT ON ALL TABLES IN SCHEMA branchlab TO "${role}"`,
+        );
+        const reader = new URL(testURL!);
+        reader.username = role;
+        reader.password = role;
+        vi.stubEnv("DATABASE_URL", reader.href);
+        const prepared = await database();
+        expect(
+          (
+            await prepared.execute(
+              "SELECT version FROM schema_migrations WHERE version = 3",
+            )
+          ).rows,
+        ).toHaveLength(1);
+        // Read-only fixture permissions prove initialization did not write.
+        // A running application still needs ordinary data-write permissions.
+        await expect(
+          prepared.execute(
+            "INSERT INTO sessions (id, expires_at) VALUES ('read-only-fixture', 1)",
+          ),
+        ).rejects.toMatchObject({ code: "DATABASE_PERMISSION" });
+      } finally {
+        await closeDatabase();
+        await inspection.query(`DROP OWNED BY "${role}"`);
+        await inspection.query(`DROP ROLE "${role}"`);
+      }
+    });
+
+    it("completes initialization when a prepared schema lacks a table or the current version record", async () => {
+      await database();
+      await closeDatabase();
+      await inspection.query("DROP TABLE branchlab.trace_events");
+      expect(
+        (await (await database()).execute("SELECT id FROM trace_events")).rows,
+      ).toHaveLength(0);
+      await closeDatabase();
+      await inspection.query(
+        "DELETE FROM branchlab.schema_migrations WHERE version = 3",
+      );
+      expect(
+        (
+          await (
+            await database()
+          ).execute("SELECT version FROM schema_migrations WHERE version = 3")
+        ).rows,
+      ).toHaveLength(1);
+    });
+
     it("creates a custom namespace and refuses a same-shaped table without its required unique key", async () => {
       vi.stubEnv("DATABASE_SCHEMA", "branchlab_custom_test");
       await database();

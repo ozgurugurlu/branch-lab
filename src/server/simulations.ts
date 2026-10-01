@@ -96,7 +96,7 @@ async function createSimulationInternal(
   const now = new Date().toISOString();
   const simulation: Simulation = {
     id: randomUUID(),
-    title: input.title,
+    title: input.title?.trim() || "Untitled simulation",
     question: input.question,
     context: input.context,
     model: input.model,
@@ -227,7 +227,7 @@ async function branchSimulationInternal(
   const child: Simulation = {
     ...structuredClone(parent),
     id: randomUUID(),
-    title: title || `${parent.title.slice(0, 83)} · branch`,
+    title: title?.trim() || `${parent.title.slice(0, 83)} · branch`,
     createdAt: now,
     updatedAt: now,
     parentId: parent.id,

@@ -126,6 +126,42 @@ async function create(cookie: string): Promise<Simulation> {
 }
 
 describe("actual Next.js route contracts", () => {
+  it.each([undefined, "", "   ", "X"])(
+    "accepts an optional simulation and branch title (%j)",
+    async (title) => {
+      const cookie = await browser();
+      const response = await runsPOST(
+        req("/api/simulations", cookie, { ...input(), title }),
+      );
+      expect(response.status).toBe(200);
+      const run: Simulation = (await response.json()).data;
+      expect(run.title).toBe(title?.trim() || "Untitled simulation");
+      expect(run.title).not.toBe(run.question);
+      const branch = await branchPOST(
+        req(`/api/simulations/${run.id}/branch`, cookie, {
+          intervention: "Offer a community grant to support the pilot.",
+          title,
+        }),
+        context(run.id),
+      );
+      expect(branch.status).toBe(200);
+      expect((await branch.json()).data.title).toBe(
+        title?.trim() || `${run.title} · branch`,
+      );
+    },
+  );
+
+  it("still requires a scenario question and limits optional titles", async () => {
+    const cookie = await browser();
+    for (const payload of [
+      { ...input(), title: undefined, question: "" },
+      { ...input(), title: "x".repeat(101) },
+    ]) {
+      const response = await runsPOST(req("/api/simulations", cookie, payload));
+      expect(response.status).toBe(400);
+    }
+  });
+
   it("provides configuration and health without exposing server secrets", async () => {
     vi.stubEnv("OPENAI_API_KEY", "unit-test-cloud-key-must-stay-private");
     const response = await configGET(req("/api/config"));

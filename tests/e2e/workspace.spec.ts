@@ -26,6 +26,252 @@ test.beforeEach(async ({ page }) => {
   await unlock(page);
 });
 
+test("configured Gemini is the default while model changes and consent stay explicit", async ({
+  page,
+}) => {
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.data.providers.find(
+      (provider: { id: string }) => provider.id === "google",
+    ).configured = true;
+    await route.fulfill({ response, json: payload });
+  });
+  let submissions = 0;
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions++;
+    await route.abort();
+  });
+  await page.reload();
+  const picker = page.getByRole("combobox", { name: "Model", exact: true });
+  await expect(picker).toHaveText("Gemini 3.8 Flash");
+  await picker.click();
+  await expect(
+    page.getByRole("option", { name: "Gemini 3.8 Flash", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(async () => {
+      const menu = await page
+        .getByRole("listbox", { name: "Models" })
+        .boundingBox();
+      const selected = await page
+        .getByRole("option", { name: "Gemini 3.8 Flash", exact: true })
+        .boundingBox();
+      return Boolean(
+        menu &&
+        selected &&
+        selected.y >= menu.y &&
+        selected.y + selected.height <= menu.y + menu.height,
+      );
+    })
+    .toBe(true);
+  await page.screenshot({
+    path: "test-results/model-menu-desktop.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page
+    .getByRole("option", { name: "Gemini 3.5 Flash-Lite", exact: true })
+    .click();
+  const question = "What happens if every household receives a personal robot?";
+  await page.getByLabel("Describe a scenario").fill(question);
+  await page
+    .getByRole("button", { name: "Start simulation", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("combobox", { name: "Model", exact: true }),
+  ).toHaveText("Gemini 3.5 Flash-Lite");
+  await expect(dialog.getByLabel("Simulation name")).toHaveValue("");
+  await expect(dialog.getByLabel("Simulation name")).not.toHaveAttribute(
+    "required",
+  );
+  await expect(dialog.getByLabel("What do you want to explore?")).toHaveValue(
+    question,
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Create simulation", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    dialog.getByLabel("Allow research agents to search the web"),
+  ).toBeDisabled();
+  await expect(
+    dialog.getByText(/Web search is off for this workspace/),
+  ).toBeVisible();
+  await dialog.getByRole("combobox", { name: "Model", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox", { name: "Models" })).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(picker).toHaveText("Gemini 3.5 Flash-Lite");
+  expect(submissions).toBe(0);
+});
+
+test("model menu is compact, keyboard accessible and fits a mobile viewport", async ({
+  page,
+}) => {
+  const picker = page.getByRole("combobox", { name: "Model", exact: true });
+  await expect(picker).toHaveText("Branchlab demo");
+  const label = await picker.locator("span").boundingBox();
+  const chevron = await picker.locator("svg").boundingBox();
+  expect(chevron!.x - label!.x - label!.width).toBeLessThan(16);
+  await picker.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("listbox", { name: "Models" });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("End");
+  const unavailable = menu
+    .getByRole("group", { name: "LM Studio", exact: true })
+    .getByRole("option");
+  await expect(unavailable).toHaveAttribute("aria-disabled", "true");
+  await expect(unavailable).toHaveAccessibleDescription(/enable local models/);
+  await page.keyboard.press("Enter");
+  await expect(picker).toHaveText("Branchlab demo");
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(picker).toBeFocused();
+  await picker.click();
+  await page.keyboard.press("Tab");
+  await expect(menu).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await picker.click();
+  await expect
+    .poll(async () => {
+      const box = await menu.boundingBox();
+      return Boolean(
+        box &&
+        box.x >= 0 &&
+        box.x + box.width <= 390 &&
+        box.y >= 0 &&
+        box.y + box.height <= 844,
+      );
+    })
+    .toBe(true);
+  await page.screenshot({
+    path: "test-results/model-menu-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.getByLabel("Describe a scenario").click();
+  await expect(menu).toHaveCount(0);
+});
+
+test("unnamed scenarios and branches persist without copying their prompts into the title", async ({
+  page,
+}) => {
+  const question =
+    "How might a personal robot change daily life for households?";
+  await page.getByLabel("Describe a scenario").fill(question);
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await expect(page.getByLabel("Simulation name")).toHaveValue("");
+  await expect(page.getByLabel("What do you want to explore?")).toHaveValue(
+    question,
+  );
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Untitled simulation", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".conversation-user-message")).toContainText(
+    question,
+  );
+  await page
+    .getByRole("button", { name: "Branch scenario", exact: true })
+    .click();
+  await expect(page.getByLabel("Branch name")).toHaveValue("");
+  await expect(page.getByLabel("Branch name")).not.toHaveAttribute("required");
+  await page
+    .getByLabel("What changes?")
+    .fill(
+      "Provide free maintenance to every household participating in the pilot.",
+    );
+  await page
+    .getByRole("button", { name: "Create branch", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Untitled simulation · branch",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", {
+      name: "Untitled simulation · branch",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+test("configured local models accept an installed model ID without cloud consent", async ({
+  page,
+}) => {
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.data.providers.find(
+      (provider: { id: string }) => provider.id === "ollama",
+    ).configured = true;
+    payload.data.webSearchConfigured = true;
+    await route.fulfill({ response, json: payload });
+  });
+  const submissions: Record<string, unknown>[] = [];
+  await page.route("**/api/simulations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: "MODEL_UNAVAILABLE",
+          message: "Test endpoint unavailable.",
+          retryable: true,
+        },
+      },
+    });
+  });
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Add sources and configure scenario" })
+    .click();
+  await page
+    .getByLabel("What do you want to explore?")
+    .fill("How could local communities adapt to personal robots?");
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox", { name: "Model", exact: true }).click();
+  await page
+    .getByRole("listbox")
+    .getByRole("group", { name: "Ollama", exact: true })
+    .getByRole("option", { name: "Qwen3 8B", exact: true })
+    .click();
+  await page.getByLabel("Installed model ID").fill("namespace/custom:8b");
+  await expect(
+    page.getByLabel("Allow cloud model processing for this run"),
+  ).not.toBeChecked();
+  await expect(
+    page.getByLabel("Allow research agents to search the web"),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Create simulation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Retry simulation", exact: true }),
+  ).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({
+    title: "",
+    model: { provider: "ollama", model: "namespace/custom:8b" },
+    privacy: { allowCloud: false, allowWebSearch: false },
+  });
+});
+
 test("chat, inspect, interview, branch, report, export and unlock persisted simulations", async ({
   page,
 }) => {
@@ -647,6 +893,7 @@ test("a cloud scenario keeps explicit consent before moving progress into chat",
   page,
 }) => {
   let cloudModel = "";
+  let cloudModelName = "";
   await page.route("**/api/config", async (route) => {
     const response = await route.fetch();
     const payload = await response.json();
@@ -655,6 +902,7 @@ test("a cloud scenario keeps explicit consent before moving progress into chat",
     );
     provider.configured = true;
     cloudModel = provider.models[0].id;
+    cloudModelName = provider.models[0].name;
     payload.data.webSearchConfigured = true;
     await route.fulfill({ response, json: payload });
   });
@@ -677,9 +925,8 @@ test("a cloud scenario keeps explicit consent before moving progress into chat",
   });
   await page.reload();
   await expect(page.getByLabel("Describe a scenario")).toBeVisible();
-  await page
-    .getByLabel("Model", { exact: true })
-    .selectOption(`openai:${cloudModel}`);
+  await page.getByRole("combobox", { name: "Model", exact: true }).click();
+  await page.getByRole("option", { name: cloudModelName, exact: true }).click();
   const question =
     "What if personal robots were available to every household worldwide?";
   await page.getByLabel("Describe a scenario").fill(question);
@@ -688,6 +935,7 @@ test("a cloud scenario keeps explicit consent before moving progress into chat",
     .click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
+  await expect(page.getByLabel("Simulation name")).toHaveValue("");
   await expect(page.getByLabel("What do you want to explore?")).toHaveValue(
     question,
   );
@@ -723,11 +971,8 @@ test("a cloud scenario keeps explicit consent before moving progress into chat",
     .getByRole("button", { name: "Edit scenario", exact: true })
     .click();
   await expect(
-    dialog.getByRole("combobox", { name: "Model provider", exact: true }),
-  ).toHaveValue("openai");
-  await expect(
     dialog.getByRole("combobox", { name: "Model", exact: true }),
-  ).toHaveValue(cloudModel);
+  ).toHaveText(cloudModelName);
   await expect(
     page.getByLabel("Allow cloud model processing for this run"),
   ).toBeChecked();
